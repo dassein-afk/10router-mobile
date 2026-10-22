@@ -1,0 +1,17 @@
+--- a/src/app/api/version/update/route.js
++++ b/src/app/api/version/update/route.js
+@@ -33,6 +33,14 @@
+ }
+ 
+ export async function POST() {
++  // Ponytail 下游补丁：android 渠道硬拒 npm 自更新——它会 killMitm/杀网关进程，再把包
++  // 装到 Termux prefix（不是正在跑的 payload 目录），结果是短暂断服 + 版本没变。
++  if ((process.env.INSTALL_CHANNEL || "") === "android") {
++    return NextResponse.json(
++      { success: false, message: "APK 安装方式不支持自更新，请下载新版 APK 覆盖安装" },
++      { status: 403 },
++    );
++  }
+   if (process.env.NODE_ENV !== "production") {
+     return NextResponse.json(
+       { success: false, message: "Update is only available in production build (10router CLI)" },

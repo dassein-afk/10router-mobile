@@ -1,0 +1,19 @@
+--- a/src/app/api/version/route.js
++++ b/src/app/api/version/route.js
+@@ -125,9 +125,15 @@
+   // desktop installers attached to the matching GitHub release, so hand the UI
+   // that URL.
+   const installChannel = process.env.INSTALL_CHANNEL || "";
++  // Ponytail 下游补丁：android 渠道（APK 内置网关）不走 npm 更新——那会杀掉网关进程、
++  // 且把包装到 Termux prefix 里而不是 payload 目录，用户看到"更新完还是旧版"。
++  // 改成给一个下载新 APK 的链接。
++  const androidApkUrl = process.env.ANDROID_APK_URL || "";
+   const releaseUrl = installChannel === "fpk" || installChannel === "desktop"
+     ? `${GITHUB_CONFIG.repoUrl}/releases/tag/v${latestVersion || currentVersion}`
+-    : null;
++    : installChannel === "android"
++      ? (androidApkUrl || null)
++      : null;
+ 
+   return Response.json({
+     currentVersion, latestVersion, hasUpdate, installChannel, releaseUrl, diskVersion: readDiskVersion(),

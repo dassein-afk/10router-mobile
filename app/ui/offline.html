@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0a">
+<title>面板未就绪</title>
+<style>
+  :root{--bg:#0a0a0a;--card:#141414;--card2:#1c1c1c;--line:#272727;--fg:#ededed;
+        --dim:#a2a2a2;--dim2:#8c8c8c;--acc:#f0ebe1;--accfg:#0a0a0a;--warn:#d9a441;--code:#cfc9bd;
+        --r:14px;--r2:11px;--r3:9px}
+  /* 跟随系统深浅色（浅色 token 取自 CD 面板） */
+  :root[data-scheme="light"]{--bg:#f5f6f8;--card:#ffffff;--card2:#fafafa;--line:#e5e5e5;
+        --fg:#1f1f1f;--dim:#5f6368;--dim2:#656b73;--acc:#1f1f1f;--accfg:#ffffff;--warn:#8a6100;--code:#1f5f43}
+  @media (prefers-color-scheme: light){
+    :root:not([data-scheme]){--bg:#f5f6f8;--card:#ffffff;--card2:#fafafa;--line:#e5e5e5;
+      --fg:#1f1f1f;--dim:#5f6368;--dim2:#656b73;--acc:#1f1f1f;--accfg:#ffffff;--warn:#8a6100;--code:#1f5f43}
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,"HarmonyOS Sans SC","PingFang SC",sans-serif}
+  .wrap{max-width:520px;margin:0 auto;padding:calc(46px + env(safe-area-inset-top)) 18px 40px}
+  .ic{width:44px;height:44px;border-radius:var(--r3);background:var(--card2);border:1px solid var(--line);
+    display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:16px}
+  h1{margin:0 0 8px;font-size:19px;font-weight:600}
+  p{margin:0 0 10px;color:var(--dim);font-size:14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin:16px 0}
+  .row{display:flex;gap:8px;margin-top:12px}
+  button{flex:1 1 0;border:0;border-radius:var(--r2);padding:12px;font:600 14.5px/1 inherit;cursor:pointer;transition:opacity .12s,transform .08s}
+  button:active{transform:translateY(1px)}
+  .p{background:var(--acc);color:var(--accfg)}
+  .g{background:var(--card2);color:var(--fg);border:1px solid var(--line);font-weight:500}
+  ul{margin:8px 0 0;padding-left:20px;color:var(--dim);font-size:13.5px}
+  li{margin:4px 0}
+  code{font:12.5px/1.5 ui-monospace,Menlo,monospace;color:var(--code)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="ic">⚠</div>
+  <h1 id="t">面板暂时打不开</h1>
+  <p id="d">服务还没启动完成。</p>
+
+  <div class="card">
+    <div style="font-size:14px;font-weight:550">可以这样处理</div>
+    <ul id="hints"></ul>
+  </div>
+
+  <!-- 原生自检结果：缺哪个文件、解包是否成功，一眼可见 -->
+  <div class="card" id="whycard" style="display:none">
+    <div style="font-size:14px;font-weight:550;margin-bottom:8px">自检</div>
+    <pre id="whybox" style="margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:12.5px/1.6 ui-monospace,Menlo,monospace;color:var(--fg)"></pre>
+  </div>
+
+  <!-- 日志直接显示在页面上：出问题时不需要再点任何按钮 -->
+  <div class="card" id="logcard" style="display:none">
+    <div style="font-size:14px;font-weight:550;margin-bottom:8px">运行日志（末尾几行）</div>
+    <pre id="logbox" style="margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:11.5px/1.5 ui-monospace,Menlo,monospace;color:var(--dim);max-height:44vh;overflow:auto"></pre>
+  </div>
+
+  <div class="row">
+    <button class="p" onclick="retry(this)">重试</button>
+    <button class="g" id="logbtn" onclick="showLog()">查看日志</button>
+  </div>
+  <div class="row">
+    <button class="g" onclick="act('restart', this)">重启服务</button>
+    <button class="g" onclick="back()">返回首页</button>
+  </div>
+
+  <p style="margin-top:20px;font-size:12.5px;color:var(--dim2)" id="foot"></p>
+</div>
+
+<script>
+  // 用 query 而不是 hash：只改 hash 属于同文档导航，WebView 不会重新加载页面，
+  // 于是脚本不重跑、文案会串（实测踩过）。query 变化会触发完整加载。
+  var m = /[?&]p=(gateway|credit)/.exec(location.search || '');
+  var which = m ? m[1] : 'gateway';
+  var isGw = which !== 'credit';
+
+  function $(i){ return document.getElementById(i); }
+  /* 离线页按钮同样要"按下有反应"：即时禁用+文案回执，2.5 秒后恢复 */
+  function act(n, btn){
+    if (btn && !btn.disabled) {
+      var o = btn.textContent; btn.disabled = true; btn.textContent = '已发送…';
+      setTimeout(function(){ btn.disabled = false; btn.textContent = o; }, 2500);
+    }
+    try { window.Native.act(n); } catch (e) {}
+  }
+  function back(){ try { window.Native.closePanel(); } catch (e) {} }
+  function retry(btn){
+    if (btn) { btn.disabled = true; var o = btn.textContent; btn.textContent = '重开面板…';
+      setTimeout(function(){ btn.disabled = false; btn.textContent = o; }, 2500); }
+    try { window.Native.openPanel(which); } catch (e) {}
+  }
+  function showLog(){ act(isGw ? 'log' : 'cdlog'); }
+
+  // 原生在页面加载完后调用：把日志尾直接铺在页面上
+  window.setLog = function (text) {
+    if (!text) return;
+    document.getElementById('logbox').textContent = text;
+    document.getElementById('logcard').style.display = 'block';
+  };
+
+  // 原生自检结果（文件是否就位 + 解包是否成功）
+  try { if (window.Native && window.Native.scheme) document.documentElement.setAttribute('data-scheme', window.Native.scheme()); } catch (e) {}
+
+  window.setReason = function (text) {
+    if (!text) return;
+    document.getElementById('whybox').textContent = text;
+    document.getElementById('whycard').style.display = 'block';
+  };
+
+  if (isGw) {
+    $('t').textContent = '网关面板暂时打不开';
+    $('d').textContent = '网关进程可能还在启动，或者已经退出。';
+    $('hints').innerHTML =
+      '<li>首次安装后要解包运行环境，约 1–2 分钟，完成后会自动可用</li>' +
+      '<li>点「重试」；仍不行就点「重启服务」</li>' +
+      '<li>再看「查看日志」，末尾通常直接写着失败原因</li>';
+    $('logbtn').textContent = '网关日志';
+    $('foot').textContent = '地址 http://127.0.0.1:20128/dashboard';
+  } else {
+    $('t').textContent = '额度管家暂时打不开';
+    $('d').textContent = '额度管家（CreditDaddy）进程没有起来。';
+    $('hints').innerHTML =
+      '<li>它和网关一起由后台服务监管，先确认首页「后台守护」正常</li>' +
+      '<li>点「重试」；仍不行就点「重启服务」</li>' +
+      '<li>点「查看日志」看启动报错（这是首次在安卓上运行，日志很关键）</li>';
+    $('logbtn').textContent = '额度日志';
+    $('foot').textContent = '地址 http://127.0.0.1:47860';
+  }
+</script>
+</body>
+</html>

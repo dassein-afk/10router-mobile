@@ -1,0 +1,19 @@
+*.apk
+*.idsig
+*.keystore
+work/
+*.log
+
+# 内部文档与备份（不进公有仓）
+_internal/
+NEXT.md
+ARCHITECTURE.md
+backup/
+dist/
+plan-*.json
+
+# 构建中间产物（由 tools/build-cd.sh、build/phase3_apk.sh 生成）
+apk/assets/
+
+# 本地构建机配置
+.buildenv

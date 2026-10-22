@@ -1,0 +1,21 @@
+--- a/src/app/globals.css
++++ b/src/app/globals.css
+@@ -312,12 +312,16 @@
+ 
+ /* macOS Vibrancy */
+ .bg-vibrancy {
++  /* 手机适配补丁 1.0.0（源码级，勿删）：原值 rgba(…,0.72) + blur(20px)。
++     Android WebView 里 backdrop-filter 经常不生效 → 侧栏只剩 72% 透明的底，
++     与下方内容重叠（用户截图：侧栏透明、内容穿透）。改成不透明主题色即可，
++     桌面浏览器下观感基本一致（侧栏本来就是整块底色）。 */
+   backdrop-filter: blur(20px);
+   -webkit-backdrop-filter: blur(20px);
+-  background: rgba(255, 255, 255, 0.72);
++  background: var(--color-bg);
+ }
+ .dark .bg-vibrancy {
+-  background: rgba(38, 38, 38, 0.72);
++  background: var(--color-bg);
+ }
+ 
+ /* macOS Traffic Lights */

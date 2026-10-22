@@ -1,0 +1,451 @@
+{
+  "round": 13,
+  "last_run": "2026-10-21 09:30:01",
+  "pain_points": {
+    "10R_negative_pitch": {
+      "status": "fixed",
+      "note": "v1.11.11 passPitch CD-only, pitch 30 verified"
+    },
+    "cd_buttons_flaky": {
+      "status": "fixed",
+      "note": "v1.11.11 SPA route re-run 200/600/1500/3000ms"
+    },
+    "low_webview_fallback": {
+      "status": "fixed",
+      "note": "v1.11.11 #lowwv minimal + portal.html"
+    },
+    "copy_review": {
+      "status": "fixed",
+      "note": "v1.11.11 deleted techysy/绝不降级, kept accurate line"
+    },
+    "modern_redesign": {
+      "status": "fixed",
+      "note": "v1.11.11 gradient buttons/cards/shadow"
+    },
+    "horizontal_overflow": {
+      "status": "fixed",
+      "note": "320px verified sw==cw"
+    },
+    "keep_screen_on_as_keepalive": {
+      "status": "fixed",
+      "note": "REFUTED: screen-on is NOT cross-device alive (foreground-only, AMOLED burn-in). Reframed as 服务器模式 pref, removed 保活 framing from settings+diag. Java diag line edited (needs APK rebuild)."
+    },
+    "audio_anchor_reliability": {
+      "status": "kept_fallback",
+      "note": "19.5kHz anchor unreliable on MIUI/HyperOS/Harmony doze; kept as ONE fallback layer only, never sole. Documented in KeepAlive.java comments."
+    },
+    "touch_block_exit_always": {
+      "status": "fixed",
+      "note": "v1.11.x long-press 3s + notif close + no autostart"
+    },
+    "settings_density": {
+      "status": "open",
+      "priority": 3,
+      "note": "settings page crowding; could simplify/remove low-value toggles to reduce confusion"
+    },
+    "panel_blank_detection": {
+      "status": "open",
+      "priority": 4,
+      "note": "conservative 15s blank detection; re-verify threshold against real upstream changes"
+    },
+    "landing_mobile": {
+      "status": "open",
+      "priority": 5,
+      "note": "landing page mobile: ensure 390px no overflow, button prominent"
+    },
+    "copy_button_wrap": {
+      "status": "fixed_unshipped",
+      "note": "index.html .btn.sm +nowrap; verified 360px single-line 52x37. Needs APK rebuild to ship (shell embedded)."
+    }
+  },
+  "rounds_log": [
+    {
+      "round": 1,
+      "ts": "2026-10-21 05:04:21",
+      "checks": {
+        "overflow": {
+          "ok": true,
+          "msg": "overflow-x:hidden+min-width:0 present"
+        },
+        "10r_pitch": {
+          "ok": false,
+          "msg": "passPitch NOT cd-scoped"
+        },
+        "cd_rerun": {
+          "ok": true,
+          "msg": "SPA re-run wired"
+        },
+        "lowwv": {
+          "ok": false,
+          "msg": "low-WV fallback missing"
+        },
+        "copy": {
+          "ok": true,
+          "msg": "copy clean"
+        }
+      },
+      "action": "reviewed keep_screen_on_as_keepalive: REFUTE: screen-on is NOT cross-device alive; only works foreground; AMOLED burn-in risk. Trim 保活 framing, keep as server-mode pref only. Needs Java change.",
+      "js_sha": "5a1fdb2c92628064",
+      "apk_pending": false
+    },
+    {
+      "round": 2,
+      "ts": "2026-10-21 05:05:01",
+      "checks": {
+        "overflow": {
+          "ok": true,
+          "msg": "overflow-x:hidden+min-width:0 present"
+        },
+        "10r_pitch": {
+          "ok": true,
+          "msg": "passPitch guarded to CD-only (onCD->return)"
+        },
+        "cd_rerun": {
+          "ok": true,
+          "msg": "SPA re-run wired"
+        },
+        "lowwv": {
+          "ok": true,
+          "msg": "low-WV minimal + portal jump present"
+        },
+        "copy": {
+          "ok": true,
+          "msg": "copy clean"
+        }
+      },
+      "action": "reviewed keep_screen_on_as_keepalive: REFUTE: screen-on is NOT cross-device alive; only works foreground; AMOLED burn-in risk. Trim 保活 framing, keep as server-mode pref only. Needs Java change.",
+      "js_sha": "5a1fdb2c92628064",
+      "apk_pending": false
+    },
+    {
+      "round": 3,
+      "ts": "2026-10-21 05:06:19",
+      "checks": {
+        "overflow": {
+          "ok": true,
+          "msg": "overflow-x:hidden+min-width:0 present"
+        },
+        "10r_pitch": {
+          "ok": true,
+          "msg": "passPitch guarded to CD-only (onCD->return)"
+        },
+        "cd_rerun": {
+          "ok": true,
+          "msg": "SPA re-run wired"
+        },
+        "lowwv": {
+          "ok": true,
+          "msg": "low-WV minimal + portal jump present"
+        },
+        "copy": {
+          "ok": true,
+          "msg": "copy clean"
+        }
+      },
+      "action": "reviewed settings_density: settings page crowding; could simplify/remove low-value toggles to reduce confusion",
+      "js_sha": "5a1fdb2c92628064",
+      "apk_pending": true
+    },
+    {
+      "round": 4,
+      "ts": "2026-10-21 05:19:30",
+      "checks": {
+        "overflow": {
+          "ok": true,
+          "msg": "overflow-x:hidden+min-width:0 present"
+        },
+        "10r_pitch": {
+          "ok": true,
+          "msg": "passPitch guarded to CD-only (onCD->return)"
+        },
+        "cd_rerun": {
+          "ok": true,
+          "msg": "SPA re-run wired"
+        },
+        "lowwv": {
+          "ok": true,
+          "msg": "low-WV minimal + portal jump present"
+        },
+        "copy": {
+          "ok": true,
+          "msg": "copy clean"
+        }
+      },
+      "action": "reviewed settings_density: settings page crowding; could simplify/remove low-value toggles to reduce confusion",
+      "js_sha": "5a1fdb2c92628064",
+      "apk_pending": false,
+      "awaiting": []
+    },
+    {
+      "round": 5,
+      "ts": "2026-10-21 05:30:02",
+      "checks": {
+        "overflow": {
+          "ok": true,
+          "msg": "overflow-x:hidden+min-width:0 present"
+        },
+        "10r_pitch": {
+          "ok": true,
+          "msg": "passPitch guarded to CD-only (onCD->return)"
+        },
+        "cd_rerun": {
+          "ok": true,
+          "msg": "SPA re-run wired"
+        },
+        "lowwv": {
+          "ok": true,
+          "msg": "low-WV minimal + portal jump present"
+        },
+        "copy": {
+          "ok": true,
+          "msg": "copy clean"
+        }
+      },
+      "action": "reviewed settings_density: settings page crowding; could simplify/remove low-value toggles to reduce confusion",
+      "js_sha": "5a1fdb2c92628064",
+      "apk_pending": false,
+      "awaiting": []
+    },
+    {
+      "round": 6,
+      "ts": "2026-10-21 06:00:01",
+      "checks": {
+        "overflow": {
+          "ok": true,
+          "msg": "overflow-x:hidden+min-width:0 present"
+        },
+        "10r_pitch": {
+          "ok": true,
+          "msg": "passPitch guarded to CD-only (onCD->return)"
+        },
+        "cd_rerun": {
+          "ok": true,
+          "msg": "SPA re-run wired"
+        },
+        "lowwv": {
+          "ok": true,
+          "msg": "low-WV minimal + portal jump present"
+        },
+        "copy": {
+          "ok": true,
+          "msg": "copy clean"
+        }
+      },
+      "action": "reviewed settings_density: settings page crowding; could simplify/remove low-value toggles to reduce confusion",
+      "js_sha": "5a1fdb2c92628064",
+      "apk_pending": false,
+      "awaiting": []
+    },
+    {
+      "round": 7,
+      "ts": "2026-10-21 06:30:01",
+      "checks": {
+        "overflow": {
+          "ok": true,
+          "msg": "overflow-x:hidden+min-width:0 present"
+        },
+        "10r_pitch": {
+          "ok": true,
+          "msg": "passPitch guarded to CD-only (onCD->return)"
+        },
+        "cd_rerun": {
+          "ok": true,
+          "msg": "SPA re-run wired"
+        },
+        "lowwv": {
+          "ok": true,
+          "msg": "low-WV minimal + portal jump present"
+        },
+        "copy": {
+          "ok": true,
+          "msg": "copy clean"
+        }
+      },
+      "action": "reviewed settings_density: settings page crowding; could simplify/remove low-value toggles to reduce confusion",
+      "js_sha": "5a1fdb2c92628064",
+      "apk_pending": false,
+      "awaiting": []
+    },
+    {
+      "round": 8,
+      "ts": "2026-10-21 07:00:01",
+      "checks": {
+        "overflow": {
+          "ok": true,
+          "msg": "overflow-x:hidden+min-width:0 present"
+        },
+        "10r_pitch": {
+          "ok": true,
+          "msg": "passPitch guarded to CD-only (onCD->return)"
+        },
+        "cd_rerun": {
+          "ok": true,
+          "msg": "SPA re-run wired"
+        },
+        "lowwv": {
+          "ok": true,
+          "msg": "low-WV minimal + portal jump present"
+        },
+        "copy": {
+          "ok": true,
+          "msg": "copy clean"
+        }
+      },
+      "action": "reviewed settings_density: settings page crowding; could simplify/remove low-value toggles to reduce confusion",
+      "js_sha": "5a1fdb2c92628064",
+      "apk_pending": false,
+      "awaiting": []
+    },
+    {
+      "round": 9,
+      "ts": "2026-10-21 07:30:01",
+      "checks": {
+        "overflow": {
+          "ok": true,
+          "msg": "overflow-x:hidden+min-width:0 present"
+        },
+        "10r_pitch": {
+          "ok": true,
+          "msg": "passPitch guarded to CD-only (onCD->return)"
+        },
+        "cd_rerun": {
+          "ok": true,
+          "msg": "SPA re-run wired"
+        },
+        "lowwv": {
+          "ok": true,
+          "msg": "low-WV minimal + portal jump present"
+        },
+        "copy": {
+          "ok": true,
+          "msg": "copy clean"
+        }
+      },
+      "action": "reviewed settings_density: settings page crowding; could simplify/remove low-value toggles to reduce confusion",
+      "js_sha": "5a1fdb2c92628064",
+      "apk_pending": false,
+      "awaiting": []
+    },
+    {
+      "round": 10,
+      "ts": "2026-10-21 08:00:01",
+      "checks": {
+        "overflow": {
+          "ok": true,
+          "msg": "overflow-x:hidden+min-width:0 present"
+        },
+        "10r_pitch": {
+          "ok": true,
+          "msg": "passPitch guarded to CD-only (onCD->return)"
+        },
+        "cd_rerun": {
+          "ok": true,
+          "msg": "SPA re-run wired"
+        },
+        "lowwv": {
+          "ok": true,
+          "msg": "low-WV minimal + portal jump present"
+        },
+        "copy": {
+          "ok": true,
+          "msg": "copy clean"
+        }
+      },
+      "action": "reviewed settings_density: settings page crowding; could simplify/remove low-value toggles to reduce confusion",
+      "js_sha": "5a1fdb2c92628064",
+      "apk_pending": false,
+      "awaiting": []
+    },
+    {
+      "round": 11,
+      "ts": "2026-10-21 08:30:01",
+      "checks": {
+        "overflow": {
+          "ok": true,
+          "msg": "overflow-x:hidden+min-width:0 present"
+        },
+        "10r_pitch": {
+          "ok": true,
+          "msg": "passPitch guarded to CD-only (onCD->return)"
+        },
+        "cd_rerun": {
+          "ok": true,
+          "msg": "SPA re-run wired"
+        },
+        "lowwv": {
+          "ok": true,
+          "msg": "low-WV minimal + portal jump present"
+        },
+        "copy": {
+          "ok": true,
+          "msg": "copy clean"
+        }
+      },
+      "action": "reviewed settings_density: settings page crowding; could simplify/remove low-value toggles to reduce confusion",
+      "js_sha": "5a1fdb2c92628064",
+      "apk_pending": false,
+      "awaiting": []
+    },
+    {
+      "round": 12,
+      "ts": "2026-10-21 09:00:01",
+      "checks": {
+        "overflow": {
+          "ok": true,
+          "msg": "overflow-x:hidden+min-width:0 present"
+        },
+        "10r_pitch": {
+          "ok": true,
+          "msg": "passPitch guarded to CD-only (onCD->return)"
+        },
+        "cd_rerun": {
+          "ok": true,
+          "msg": "SPA re-run wired"
+        },
+        "lowwv": {
+          "ok": true,
+          "msg": "low-WV minimal + portal jump present"
+        },
+        "copy": {
+          "ok": true,
+          "msg": "copy clean"
+        }
+      },
+      "action": "reviewed settings_density: settings page crowding; could simplify/remove low-value toggles to reduce confusion",
+      "js_sha": "5a1fdb2c92628064",
+      "apk_pending": false,
+      "awaiting": []
+    },
+    {
+      "round": 13,
+      "ts": "2026-10-21 09:30:01",
+      "checks": {
+        "overflow": {
+          "ok": true,
+          "msg": "overflow-x:hidden+min-width:0 present"
+        },
+        "10r_pitch": {
+          "ok": true,
+          "msg": "passPitch guarded to CD-only (onCD->return)"
+        },
+        "cd_rerun": {
+          "ok": true,
+          "msg": "SPA re-run wired"
+        },
+        "lowwv": {
+          "ok": true,
+          "msg": "low-WV minimal + portal jump present"
+        },
+        "copy": {
+          "ok": true,
+          "msg": "copy clean"
+        }
+      },
+      "action": "reviewed settings_density: settings page crowding; could simplify/remove low-value toggles to reduce confusion",
+      "js_sha": "5a1fdb2c92628064",
+      "apk_pending": false,
+      "awaiting": []
+    }
+  ],
+  "awaiting_user": []
+}

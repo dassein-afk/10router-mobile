@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0a">
+<title>10Router</title>
+<style>
+  :root{
+    /* 配色直接取自两个面板的真实主色：网关 #0a0a0a + 奶白 #FDFAF6，CD 深色 #0a0a0c。
+       壳不再用偏蓝的自有配色 —— 否则头部和面板像两个 App（这是用户上一版的批评）。 */
+    --bg:#0a0a0a; --card:#141414; --card2:#1c1c1c; --line:#272727;
+    --fg:#ededed; --dim:#a2a2a2; --dim2:#8c8c8c;
+    --acc:#f0ebe1; --accfg:#0a0a0a;
+    --code:#cfc9bd;
+    --ok:#4ac26b; --warn:#d9a441; --bad:#f0665e;
+    --okfg:#a8e6bd; --okbg:#12261a; --okbd:#2a5238;
+    --warnfg:#f0d49a; --warnbg:#241d0e; --warnbd:#4a3a16;
+    --badfg:#ffb8b3; --badbg:#261211; --badbd:#5a2a26;
+    /* ── 圆角层级（全壳统一，Java 原生导航镜像同值）──
+       --r  卡片/折叠块 18  ·  --r2 控件(按钮/分段/开关轨道) 13  ·  --r3 小元素(图标/标签/芯片) 10
+       旧 --r:16/--r2:11 几何偏小且层级乱；统一后：大块圆角大、控件中、小件小，视觉一致。 */
+    --r:18px; --r2:13px; --r3:10px; --nav:52px;
+    --sh:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.28);
+    --sh-sm:0 1px 2px rgba(0,0,0,.35);
+    --grad:linear-gradient(135deg,#f3ede2,#e7dccb);
+  }
+  /* 亮色：取自 CD 面板 :root（--bg:#f5f6f8 / --surface:#fff / --text:#1f1f1f / --btn-bg:#1f1f1f）
+     与网关亮色主题。壳两套主题都支持并跟随系统；**不强行规定两个面板用什么主题**。 */
+  :root[data-scheme="light"]{
+    --bg:#f5f6f8; --card:#ffffff; --card2:#fafafa; --line:#e5e5e5;
+    --fg:#1f1f1f; --dim:#5f6368; --dim2:#656b73;
+    --acc:#1f1f1f; --accfg:#ffffff;
+    --code:#1f5f43;
+    --ok:#1a7f37; --warn:#8a6100; --bad:#cf222e;
+    --okfg:#0f5132; --okbg:#e8f5ec; --okbd:#b7e0c4;
+    --warnfg:#7a5300; --warnbg:#fff6e0; --warnbd:#f0dca8;
+    --badfg:#a40e26; --badbg:#fdecef; --badbd:#f5c2cb;
+    --sh:0 1px 2px rgba(20,20,40,.06),0 10px 30px rgba(20,20,40,.08);
+    --sh-sm:0 1px 2px rgba(20,20,40,.06);
+    --grad:linear-gradient(135deg,#2a2c31,#15161a);
+  }
+  @media (prefers-color-scheme: light){
+    :root:not([data-scheme]){
+      --bg:#f5f6f8; --card:#ffffff; --card2:#fafafa; --line:#e5e5e5;
+      --fg:#1f1f1f; --dim:#5f6368; --dim2:#656b73;
+      --acc:#1f1f1f; --accfg:#ffffff;
+      --code:#1f5f43;
+      --ok:#1a7f37; --warn:#8a6100; --bad:#cf222e;
+      --okfg:#0f5132; --okbg:#e8f5ec; --okbd:#b7e0c4;
+      --warnfg:#7a5300; --warnbg:#fff6e0; --warnbd:#f0dca8;
+      --badfg:#a40e26; --badbg:#fdecef; --badbd:#f5c2cb;
+    }
+  }
+  *{box-sizing:border-box;min-width:0;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;overflow-x:hidden;background:var(--bg);color:var(--fg);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"HarmonyOS Sans SC","PingFang SC","Noto Sans CJK SC",sans-serif;
+    -webkit-text-size-adjust:100%;overscroll-behavior-y:none}
+  .app{display:flex;flex-direction:column;height:100%}
+
+  /* 头部：同色 + 细线 + 毛玻璃，logo 渐变强化品牌感 */
+  header{flex:0 0 auto;display:flex;align-items:center;gap:11px;
+    padding:calc(12px + env(safe-area-inset-top)) 16px 12px;border-bottom:1px solid var(--line);
+    background:var(--card);
+    position:sticky;top:0;z-index:10}
+  .logo{flex:0 0 34px;height:34px;border-radius:10px;background:var(--grad);color:var(--accfg);
+    display:flex;align-items:center;justify-content:center;font-weight:800;font-size:17px;
+    box-shadow:0 2px 8px rgba(0,0,0,.18)}
+  .htxt{flex:1 1 auto;min-width:0}
+  .htxt h1{margin:0;font-size:17px;font-weight:750;letter-spacing:-.3px}
+  .htxt p{margin:1px 0 0;font-size:12px;color:var(--dim2)}
+  .dot{width:9px;height:9px;border-radius:50%;flex:0 0 9px;background:var(--dim2);box-shadow:0 0 0 3px color-mix(in srgb,var(--dim2) 22%,transparent)}
+  .dot.ok{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}
+  .dot.warn{background:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 22%,transparent)}
+  .dot.bad{background:var(--bad);box-shadow:0 0 0 3px color-mix(in srgb,var(--bad) 22%,transparent)}
+
+  /* 底部导航由原生绘制并常驻（面板页也在），这里只负责给它留出高度 */
+  main{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px 14px calc(var(--nav) + 20px)}
+  section{display:none} section.on{display:block}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:13px}
+  .card h2{margin:0 0 12px;font-size:11.5px;color:var(--dim);font-weight:700;letter-spacing:.5px;text-transform:uppercase}
+  .hero{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+  .hero .dot{align-self:center}
+  .hero .big{flex:1 1 auto;min-width:0}
+  .hero .big b{display:block;font-size:18px;font-weight:650;letter-spacing:-.3px}
+  .hero .big span{display:block;font-size:12.5px;color:var(--dim);margin-top:3px;overflow-wrap:anywhere}
+
+  .btn{display:block;width:100%;text-align:center;border:0;border-radius:13px;
+    font:700 15px/1 inherit;padding:15px;cursor:pointer;background:var(--grad);color:var(--accfg);
+    box-shadow:0 2px 10px rgba(0,0,0,.12);transition:transform .08s,opacity .15s,box-shadow .15s}
+  .btn:active{transform:translateY(1px);box-shadow:0 1px 4px rgba(0,0,0,.12)}
+  .btn.ghost{background:var(--card2);color:var(--fg);border:1px solid var(--line);font-weight:600;box-shadow:none}
+  .btn.ghost:active{transform:translateY(1px);opacity:.9}
+  .btn.sm{padding:9px 13px;font-size:13px;width:auto;display:inline-block;white-space:nowrap;flex:0 0 auto}
+  .btn[disabled]{opacity:.5}
+  /* 进行中 / 成功态：只加颜色和转圈，不改字号、控件尺寸、形状（用户红线） */
+  .btn.busy{opacity:.75;pointer-events:none}
+  .btn .spin{display:inline-block;width:11px;height:11px;margin-right:6px;vertical-align:-1px;
+    border:2px solid currentColor;border-right-color:transparent;border-radius:50%;
+    animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .btn.done{color:var(--ok);border-color:var(--okbd)}
+  .row{display:flex;gap:9px}
+  .row>*{flex:1 1 0}
+
+  .chk{display:flex;align-items:center;gap:10px;padding:12px 0;border-top:1px solid var(--line)}
+  .chk:first-of-type{border-top:0}
+  .chk.chk2{flex-wrap:wrap;padding-bottom:4px}
+  .chk.chk2 .tx{flex:1 1 calc(100% - 170px)}
+  .chk .ops{display:flex;align-items:center;gap:6px;flex:1 1 100%;margin-left:34px;flex-wrap:wrap}
+  /* 分组：一组一个性质（单选/开关/动作），整块下沉到图标列下方，清晰分区、不再与标题抢行 */
+  .ops-group{display:flex;flex-direction:column;align-items:stretch;gap:8px;
+    width:calc(100% - 34px);
+    margin:2px 0 0 34px;padding:10px 0 2px;border-top:1px solid var(--line)}
+  .ops-group:first-of-type{border-top:0;padding-top:2px}
+  .ops-group .gl{flex:0 0 auto;align-self:flex-start;font-size:10.5px;color:var(--dim2);font-weight:600;letter-spacing:.3px;
+    text-transform:uppercase;background:var(--card2);border:1px solid var(--line);
+    padding:2px 7px;border-radius:var(--r3);margin-bottom:0}
+  /* 动作按钮：在标签下方独占一行，两个并排拉满宽、左缘一致对齐到 34px 列 */
+  .ops-group .btn.sm.ghost{flex:1 1 auto;min-width:0;width:100%;justify-content:center;text-align:center}
+  /* 开关组横向并排（不再各占一行留白）：贴左、间隔适中，保持原开关尺寸 */
+  .ops-group .sw-row{display:flex;flex-wrap:wrap;gap:18px;align-items:center;margin-top:2px}
+  .ops-group .sw-row .sw{flex:0 0 auto}
+  /* 组级说明：填满横向空间，消除稀疏感（开关尺寸不变，只补信息密度） */
+  .ops-group .opnote{margin:8px 0 0;font-size:12px;line-height:1.5;color:var(--dim2)}
+  /* 分段控件（单选）：一组里选一个，选中用强调色 —— 与"独立开关"形态明显不同 */
+  .seg{display:flex;gap:3px;flex:1 1 0;background:var(--card2);border:1px solid var(--line);
+    border-radius:var(--r2);padding:3px}
+  .seg button{flex:1 1 0;min-width:0;border:0;background:none;border-radius:calc(var(--r2) - 3px);
+    padding:8px 4px;font:600 12.5px/1 inherit;color:var(--dim);cursor:pointer;transition:background .12s,color .12s}
+  .seg button.on{background:var(--acc);color:var(--accfg)}
+  /* 开关（独立开/关）：滑块状，和分段控件一眼区分；轨道/手柄按 --r3 节奏 */
+  .sw{display:inline-flex;align-items:center;gap:7px;border:0;background:none;padding:6px 2px;
+    font:500 13px/1 inherit;color:var(--dim);cursor:pointer}
+  .sw i{flex:0 0 34px;height:20px;border-radius:999px;background:var(--line);
+    border:1px solid var(--line);position:relative;transition:background .15s,border-color .15s}
+  .sw i::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;
+    border-radius:50%;background:var(--dim2);transition:left .15s,background .15s}
+  .sw.on{color:var(--fg)}
+  .sw.on i{background:var(--ok);border-color:var(--okbd)}
+  .sw.on i::after{left:16px;background:#fff}
+  /* 行图标：圆角小方块（--r3），与圆形 logo/dot 同族但更小，避免方角突兀 */
+  .chk .ic{flex:0 0 26px;height:26px;border-radius:var(--r3);background:var(--card2);display:flex;
+    align-items:center;justify-content:center;font-size:13px;color:var(--dim)}
+  .chk .tx{flex:1 1 auto;min-width:0}
+  .chk .tx b{display:block;font-size:14px;font-weight:550}
+  /* 访问地址/端口这类长串（http://192.168.1.23:20128/v1）在 320px 窄屏会把 .tx 撑破：
+     span 默认只在空格处折行，而地址与后面的说明之间是中文全角空格 + 无空格长串。
+     anywhere 允许在长串内部断行，宽度才收得住（已实测 320 档 scrollWidth==clientWidth）。 */
+  .chk .tx span{display:block;font-size:12.5px;color:var(--dim2);margin-top:1px;overflow-wrap:anywhere}
+  .chip{flex:0 0 auto;font-size:12px;padding:4px 8px;border-radius:var(--r3);background:var(--card2);
+    color:var(--dim);border:1px solid var(--line);white-space:nowrap}
+  .chip.ok{color:var(--okfg);border-color:var(--okbd);background:var(--okbg)}
+  .chip.warn{color:var(--warnfg);border-color:var(--warnbd);background:var(--warnbg)}
+  .chip.bad{color:var(--badfg);border-color:var(--badbd);background:var(--badbg)}
+
+  /* 次要说明文字：必须真的存在。app.js 一直在用 .note，
+     而这类从没被定义过 → 说明段以正文 15px 全黑渲染，首页因此出现 291px 高的"文字墙"。 */
+  .note{display:block;margin-top:9px;font-size:12.5px;line-height:1.55;color:var(--dim2)}
+
+  /* 行内折叠说明：不要继承上面 details 的卡片外观（否则设置页出现"卡中卡"） */
+  .chk details.why{flex:1 1 100%;margin:6px 0 0 34px;background:none;border:0;padding:0}
+  .chk details.why summary{display:flex;align-items:center;justify-content:space-between;
+    font-size:12.5px;color:var(--dim);font-weight:500;gap:8px}
+  .chk details.why summary::-webkit-details-marker{display:none}
+  .chk details.why summary::after{content:"›";color:var(--dim2);transition:transform .15s;flex:0 0 auto}
+  .chk details.why[open] summary::after{transform:rotate(90deg)}
+  .chk details.why p{margin:0 0 6px;font-size:12.5px;line-height:1.55;color:var(--dim2)}
+  .chk details.why p:last-child{margin-bottom:0}
+
+  /* 设置页「网页版」入口：**竖排**。
+     这里原来是两个面板地址并排（flex 行、各占一半）—— 宽度规则是为"两列窄内容"设计的，
+     换成一整条 URL 后，半宽会把地址折成三四行、按钮也被挤窄。竖排 + 每行自带按钮才是对的。 */
+  .web-ports{display:flex;flex-direction:column;gap:8px;margin-bottom:9px}
+  .web-ports .wp{min-width:0;background:var(--card2);border:1px solid var(--line);
+    border-radius:var(--r2);padding:8px 9px}
+  .web-ports .wp b{display:block;font-size:12.5px;font-weight:550}
+  .web-ports .wp code{display:block;margin-top:2px;font-size:11.5px;color:var(--dim);overflow-wrap:anywhere}
+  .web-ports .wpops{display:flex;gap:7px;margin-top:7px}
+  .web-ports .wpops .btn{flex:1 1 0;min-width:0;justify-content:center;text-align:center}
+
+  /* 首页「怎么接入」：原来是 <details>，summary 那行没有关闭入口 ——
+     点开后再点同一行，手机 WebView 上不一定能回到折叠态。
+     改成显式按钮：状态在按钮文字里（查看接入方法 ⇄ 收起），一眼知道点下去会怎样。 */
+  .intro-head{display:flex;align-items:center;justify-content:space-between;gap:9px}
+  .intro-head b{font-size:13.5px;font-weight:550}
+  .intro-head .btn{flex:0 0 auto}
+  #introBody{margin-top:11px}
+  #introBody[hidden]{display:none}
+  #introBody .chk .tx b{font-size:13px;font-weight:550}
+  #introBody .chk .tx span{font-size:12px;margin-top:2px}
+
+  /* 设置页展开介绍：字号/行高/长度统一（原来三段 30/47/115 字共用 15px，
+     第三段撑到 163px 高、前两段只有 47/70px —— 一段长一段短，看不出是同一组）。
+     这里只统一"块"的节奏：正文字号降一档、行高放宽、段距统一，不动任何控件尺寸。
+     视觉验收补充三条：
+       · 标题与箭头 flex 两端对齐 + min-width:0，避免更窄机型上折行后箭头悬空；
+       · 底色压暗一档（card2 而非 card），否则与真按钮同色会被误读成"又一个按钮"；
+       · 末段用 text-wrap:pretty 消掉"碰。"这种两字孤行。 */
+  #s-set details.why{padding:12px 13px;background:var(--bg);border:1px solid var(--line);
+    border-radius:var(--r2);margin-left:34px}
+  #s-set details.why summary{font-size:13.5px;font-weight:550;color:var(--fg);
+    display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
+  #s-set details.why p{font-size:12.5px;line-height:1.72;color:var(--dim2);margin:0 0 9px;
+    text-wrap:pretty;-webkit-text-wrap:pretty}
+  #s-set details.why p:last-child{margin-bottom:0}
+
+  .stats{display:flex;gap:7px;margin-top:11px}
+  .stat{flex:1 1 0;background:var(--card2);border:1px solid var(--line);border-radius:var(--r2);padding:8px 9px}
+  .stat b{display:block;font-size:15px;font-weight:600}
+  .stat span{display:block;font-size:12px;color:var(--dim2);margin-top:1px}
+
+  details{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:13px 14px;margin-bottom:11px}
+  summary{cursor:pointer;font-size:14px;font-weight:550;list-style:none}
+  summary::-webkit-details-marker{display:none}
+  summary::after{content:"›";float:right;color:var(--dim2);transition:transform .15s}
+  details[open] summary::after{transform:rotate(90deg)}
+  details .body{margin-top:10px}
+  code{font:12.5px/1.5 ui-monospace,Menlo,monospace;color:var(--code);overflow-wrap:anywhere}
+
+  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(var(--nav) + 18px);
+    /* ⚠️ 背景与文字都必须跟随主题：写死 #242424 背景 + var(--fg) 文字，
+       亮色主题下 --fg=#1f1f1f 压在近黑背景上 = 文字与背景重合，用户看不见提示。 */
+    background:var(--card);border:1px solid var(--line);color:var(--fg);font-size:13.5px;
+    padding:10px 14px;border-radius:10px;z-index:80;opacity:0;transition:opacity .2s;max-width:88vw;text-align:center}
+  .toast.on{opacity:1}
+  /* 结果分色：成功绿框、失败红框 —— toast 不再只有一种灰 */
+  .toast.ok{border-color:var(--okbd)}
+  .toast.bad{border-color:var(--badbd);color:var(--badfg)}
+
+  nav{position:fixed;left:0;right:0;bottom:0;height:calc(var(--nav) + env(safe-area-inset-bottom));
+    padding-bottom:env(safe-area-inset-bottom);display:flex;
+    background:var(--card);
+    border-top:1px solid var(--line);z-index:20}
+  nav .wtab{flex:1 1 0;background:none;border:0;color:var(--dim2);display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:3px;font:500 11.5px/1 inherit;cursor:pointer;padding:6px 0 4px;
+    position:relative;transition:color .12s;text-decoration:none}
+  nav .wtab i{font-style:normal;font-size:18px;line-height:1}
+  nav .wtab.on{color:var(--fg)}
+  /* 选中态：图标上方加一条 2px 强调指示条，与壳强调色同源（不用色块背景，避免与头部抢视觉） */
+  nav .wtab.on::before{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);
+    width:22px;height:2px;border-radius:2px;background:var(--acc)}
+  nav svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.8;
+    stroke-linecap:round;stroke-linejoin:round}
+
+  #boot{position:fixed;inset:0;background:var(--bg);z-index:60;display:none;
+    flex-direction:column;align-items:center;justify-content:center;gap:15px;padding:32px;text-align:center}
+  #boot.on{display:flex}
+  #boot .bar{width:min(220px,68vw);height:5px;border-radius:99px;background:var(--card2);overflow:hidden}
+  #boot .bar i{display:block;height:100%;width:0;background:var(--acc);transition:width .3s}
+  #boot p{margin:0;font-size:13px;color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="logo">R</div>
+    <div class="htxt">
+      <h1>10Router</h1>
+      <p id="sub">本地 AI 网关</p>
+    </div>
+    <div class="dot" id="hdot"></div>
+  </header>
+
+  <main id="main">
+    <!-- ===== 低版本 WebView 极简首页：只留状态 + 跳浏览器看完整界面 ===== -->
+
+    <!-- ===== 首页：状态 + 主操作；所有说明文字都收在这里 ===== -->
+    <section id="s-home" class="on">
+      <div class="card">
+        <div class="hero">
+          <div class="dot" id="gdot"></div>
+          <div class="big"><b id="gtitle">正在检查…</b><span id="gsub">127.0.0.1:20128</span></div>
+        </div>
+        <div class="row">
+          <button class="btn" onclick="openPanel('gateway')">打开网关面板</button>
+          <button class="btn ghost" style="flex:0 0 82px" onclick="act('restart', this)">重启</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="hero">
+          <div class="dot" id="cdot"></div>
+          <div class="big"><b id="ctitle">额度管家</b><span id="csub">正在检查…</span></div>
+        </div>
+        <div class="row">
+          <button class="btn" id="claim" onclick="claim()">一键领取今日额度</button>
+          <button class="btn ghost" style="flex:0 0 82px" onclick="openPanel('credit')">面板</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>远程访问</h2>
+        <div id="remote"></div>
+      </div>
+
+      <div class="card">
+        <h2>后台守护</h2>
+        <div id="guardSummary"></div>
+        <div class="row" style="margin-top:11px">
+          <button class="btn ghost" onclick="tab('set')">守护设置</button>
+        </div>
+        <div class="stats">
+          <div class="stat"><b id="st-hb">—</b><span>心跳</span></div>
+          <div class="stat"><b id="st-boot">—</b><span>启动</span></div>
+          <div class="stat"><b id="st-fz">—</b><span>被冻结</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="intro-head">
+          <b>接入方法</b>
+          <button class="btn sm ghost" id="introBtn" aria-expanded="false" onclick="toggleIntro()">查看接入方法</button>
+        </div>
+        <div id="introBody" hidden>
+          <div class="chk"><div class="ic">1</div><div class="tx"><b>接口地址</b><span><code>http://127.0.0.1:20128/v1</code></span></div></div>
+          <div class="chk"><div class="ic">2</div><div class="tx"><b>密钥</b><span>在「网关」面板 → 密钥页复制</span></div></div>
+          <div class="chk"><div class="ic">3</div><div class="tx"><b>模型</b><span>先在网关面板加 provider，再填模型名</span></div></div>
+          <div class="chk"><div class="ic">4</div><div class="tx"><b>额度从哪来</b><span>在「额度」面板登录账号，每日自动领取</span></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 网关 / 额度：点标签由原生直接打开真实面板（顶层加载），这里不再有中转页 -->
+    <section id="s-gateway"></section>
+    <section id="s-credit"></section>
+
+    <!-- ===== 设置：完整守护清单 + 维护 + 关于 ===== -->
+    <section id="s-set">
+      <div class="card">
+        <h2>后台守护体检</h2>
+        <div id="checks"></div>
+        <details class="why"><summary>各项说明 · 锁屏后连不上怎么查</summary><div class="body">
+          <p>锁屏后其它设备连不上，按顺序检查：① 电池优化豁免 → ② 允许后台活动 → ③ 开启系统加固。</p>
+          <p>「常亮」只在 App 处于前台且插着电时生效，锁屏后失效。想让「屏幕黑着又不会误碰」，把「常亮（亮度0）」和「禁触摸」一起开。</p>
+        </div></details>
+      </div>
+      <div class="card">
+        <h2>远程访问</h2>
+        <div id="remote2"></div>
+      </div>
+
+      <div class="card">
+        <h2>更新</h2>
+        <div class="chk"><div class="ic">↓</div><div class="tx"><b>本软件</b><span id="swVerHint">当前版本</span></div>
+          <button class="btn sm ghost" id="updSwBtn" onclick="act('updateSw', this)">检查更新</button></div>
+              </div>
+
+      <div class="card">
+        <h2>维护</h2>
+        <div class="chk"><div class="ic">≡</div><div class="tx"><b>日志</b><span>查看运行日志</span></div>
+          <button class="btn sm ghost" onclick="act('logs', this)">查看</button></div>
+        <div class="chk"><div class="ic">↻</div><div class="tx"><b>重启网关</b><span>不修改任何配置</span></div>
+          <button class="btn sm ghost" onclick="act('restart', this)">重启</button></div>
+        <div class="chk"><div class="ic">⇪</div><div class="tx"><b>导出诊断</b><span>机型/ROM/守护状态/被杀记录</span></div>
+          <button class="btn sm ghost" id="diagBtn" onclick="act('diag', this)">导出</button></div>
+      </div>
+
+            <div class="card">
+        <h2>网页版</h2>
+        <div class="note" style="margin:0 0 9px">在电脑或平板的浏览器里打开下面的地址，可以管理网关和额度。</div>
+        <div id="webEntry" class="web-ports"></div>
+        <div class="note" style="margin:0">其它设备首次访问需要密钥，地址已自动带上；换设备后重新复制一次。</div>
+      </div>
+      <div class="card">
+        <h2>关于</h2>
+        <div class="chk"><div class="ic">v</div><div class="tx"><b id="ver">版本</b><span>本地 AI 网关与额度管家</span></div></div>
+        <div class="chk"><div class="ic">↗</div><div class="tx"><b>开源致谢</b><span>内含 10Router（网关）与 CreditDaddy（额度），两者均为 MIT 许可 © techysy 及其贡献者</span></div></div>
+        <details class="why"><summary>开源许可与鸣谢（MIT 全文）</summary><div class="body">
+          <p><b>10Router</b> — 本地 AI 路由网关与仪表盘<br>
+          <a href="https://github.com/techysy/10router" target="_blank" rel="noopener">github.com/techysy/10router</a><br>
+          MIT License · Copyright (c) 2024-2026 decolua, techysy and contributors</p>
+          <p><b>CreditDaddy</b> — 额度管家<br>
+          <a href="https://github.com/techysy/CreditDaddy" target="_blank" rel="noopener">github.com/techysy/CreditDaddy</a><br>
+          MIT License · Copyright (c) 2026 CreditDaddy contributors</p>
+          <p>MIT License（节选全文）：<br>
+          特此免费授予任何获得本软件副本的人不受限制地处理本软件的权利，包括使用、复制、修改、合并、发布、分发、再许可和/或销售副本，
+          条件是上述版权声明和本许可声明应包含在本软件的所有副本或重要部分中。<br>
+          本软件"按原样"提供，不作任何明示或暗示的担保，包括但不限于对适销性、特定用途适用性和非侵权性的担保。
+          在任何情况下，作者或版权持有人均不对任何索赔、损害或其他责任负责。</p>
+          <p>本应用外壳同样采用 MIT 许可。内置 Node.js 运行时来自 Termux，各遵其上游许可。</p>
+        </div></details>
+        <div class="chk"><div class="ic">💬</div><div class="tx"><b>交流 QQ 群</b><span>1021733571</span></div>
+          <button class="btn sm ghost" onclick="copyAddr('1021733571')">复制群号</button></div>
+      </div>
+    </section>
+  </main>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div id="boot">
+  <div class="logo" style="width:46px;height:46px;font-size:20px">R</div>
+  <div class="bar"><i id="bootbar"></i></div>
+  <p id="bootmsg">首次启动，正在准备运行环境…</p>
+  <p style="color:var(--dim2);font-size:12px;margin-top:-6px">只需这一次，之后都是秒开</p>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

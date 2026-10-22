@@ -1,0 +1,657 @@
+--- a/cd/src/panel.html
++++ b/cd/src/panel.html
+@@ -427,6 +427,39 @@
+   #toast.err { border-color: var(--err); color: var(--err); }
+   @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+   @media (max-width: 560px) { .list { grid-template-columns: 1fr; } .wrap { padding: 12px; } }
++
++  /* ============================================================
++     手机适配补丁 1.0.0（源码级，勿删）—— 原先由 panel-fix.css 在 WebView 里注入，
++     现在直接写进面板样式表。改动来源与理由见仓库 patches/UI-PATCHES-1.0.0.md。
++     规则只做"内容不越界 / 能断行 / 能滑动 / 输入不被放大 / 弹窗不出屏"，
++     不改字号、不改控件尺寸、不改列数。
++     ============================================================ */
++
++  /* 媒体与嵌入元素永远不超过容器 */
++  img, svg, video, canvas, iframe { max-width: 100%; }
++  img, video { height: auto; }
++
++  /* 长字符串（密钥 / URL / 模型名）必须能断行，否则会撑破任何容器 */
++  code, pre, kbd, samp { overflow-wrap: anywhere; }
++
++  /* 根节点不横向撑破（只约束自身，不隐藏任何内容） */
++  body { max-width: 100%; }
++
++  /* 手机上输入框字号小于 16px 时，聚焦会让系统自动放大整页 —— 行为约束，不是审美 */
++  @media (max-width: 560px) {
++    input, select, textarea { font-size: max(16px, 1em); }
++    /* 语义明确的全屏弹窗：宽度按容器流变，最多留 6% 边距（不猜类名，用 role） */
++    [role="dialog"] { max-width: 94%; max-height: 88%; overflow: auto; }
++  }
++
++  /* 头部右侧浮层（面板设置）：整块跑到屏幕外，不是宽度问题。
++     原规则 .setpop { position:absolute; right:0; width:min(560px,calc(100vw - 24px)) }，
++     它的 right:0 相对的是齿轮按钮（28px 宽），而齿轮右边还有九宫格按钮 ——
++     锚点右缘距视口右边约 50px，浮层宽度却是 100vw-24。
++     实测 360px 视口：浮层 right=310、width=336 → left=-26，左边 26px 在屏外。
++     修法：把定位锚点从「齿轮按钮」抬到「整行」，右对齐观感不变，任何宽度下左缘都留在屏内。 */
++  .head-right { position: relative; }
++  .head-right .head-setpop { position: static; }
+ </style>
+ </head>
+ <body>
+@@ -4675,6 +4708,614 @@
+ </script>
+ <!-- 语言切换加载态 -->
+ <div id="locale-busy" hidden><div class="lb-card"><span class="lb-spin"></span><span data-i18n="正在切换语言…">正在切换语言…</span></div></div>
++
++<script>
++/* 手机适配补丁 1.0.0（源码级）：原 panel-fix.js，见 patches/UI-PATCHES-1.0.0.md */
++/* ============================================================
++   CreditDaddy 面板 —— 手机适配补丁 1.0.0（源码级，勿删）
++   ------------------------------------------------------------
++   这份脚本原先由 App 在 WebView 里运行时注入（panel-fix.js），
++   现在直接内联进面板页面，随源码走：
++
++     · 没有注入时序问题（页面加载即生效，不存在"补丁还没到"的空窗）
++     · 没有开关（不再有 __panelFixDisable / 开关按钮）
++     · 不会漏注入（构建链少拷一个文件就整层失效——v1.11.18 就栽在这）
++   备份与施工图：仓库 patches/UI-PATCHES-1.0.0.md
++
++   10R 网关面板**不用**这份脚本：它的三条适配已改成源码改动
++     · 侧栏不透明   → src/app/globals.css 的 .bg-vibrancy
++     · 藏公网隧道   → EndpointPageClient.js 删除隧道/Tailscale 两段 JSX
++     · 藏面板内更新 → Sidebar.js 删除 updateInfo 块
++
++   铁律（每条都是踩过的坑）：
++     ① 绝不改字号（曾把 59 处小字抬到 11.5px，用户："你把文字都放大了"）
++     ② 绝不改控件尺寸/形态（开关被撑成圆形）
++     ③ 绝不因屏窄把并排卡片改多列（用户："你怎么把一行改成两列，这样很丑"）
++     ④ 藏东西时绝不能吞掉容器（v1.12.4：只看叶子节点 + 全等匹配 + 三道护栏）
++   ============================================================ */
++(function () {
++  if (window.__panelFix) { return; }
++  window.__panelFix = true;
++
++  /* ---- 面板分域：CD=额度(:47860)，GW=网关 10R。判定要早于任何一条规则生效。 ---- */
++  var PANEL = (function () {
++    try {
++      if (window.__panelFixForce === 'cd' || window.__panelFixForce === 'gw') return window.__panelFixForce;   // 仅测试用
++      if (location.port === '47860') return 'cd';
++      if (/[?&]p=credit/.test(location.search || '')) return 'cd';
++    } catch (e) {}
++    return 'gw';
++  })();
++  try { document.documentElement.setAttribute('data-pf', PANEL); } catch (e) {}
++  window.__panelFixPanel = PANEL;
++
++  var CONTRAST_MIN = 4.5;   // WCAG AA（正文）
++  var CRUSH_MIN = 200;      // 栅格格子窄于此、且格内有控件/长文 → 认为内容被压扁
++  var stats = { width: 0, wrap: 0, unclip: 0, scroll: 0, stack: 0, contrast: 0, reveal: 0, tunnel: 0 };
++  window.__panelFixStats = stats;
++
++  function vw() { return window.innerWidth; }
++  function vis(el) {
++    var r = el.getBoundingClientRect(), cs = getComputedStyle(el);
++    return r.width > 0 && r.height > 0 && cs.display !== 'none'
++        && cs.visibility !== 'hidden' && parseFloat(cs.opacity) > 0.05;
++  }
++  function isIconFont(cs) {
++    var f = (cs.fontFamily || '').toLowerCase();
++    return f.indexOf('material') >= 0 || f.indexOf('symbol') >= 0
++        || f.indexOf('icon') >= 0 || f.indexOf('awesome') >= 0;
++  }
++  function inScroller(el) {
++    var p = el.parentElement;
++    while (p && p !== document.body) {
++      var cs = getComputedStyle(p);
++      if (cs.overflowX === 'auto' || cs.overflowX === 'scroll') return true;
++      p = p.parentElement;
++    }
++    return false;
++  }
++  function boxW(el) {
++    var cs = getComputedStyle(el);
++    return el.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
++  }
++
++  // ---------- 颜色工具（canvas 归一化） ----------
++  var _ctx = null;
++  function ctx() {
++    if (!_ctx) { var c = document.createElement('canvas'); c.width = c.height = 1; _ctx = c.getContext('2d'); }
++    return _ctx;
++  }
++  /** 任意 CSS 颜色 → [r,g,b,a]；无法解析返回 null */
++  function toRGBA(color) {
++    try {
++      var x = ctx();
++      x.fillStyle = '#000000';
++      x.fillStyle = color;
++      var s = x.fillStyle;
++      if (s.charAt(0) === '#') {
++        var h = s.slice(1);
++        if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
++        return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16), 1];
++      }
++      var m = s.match(/[\d.]+/g);
++      if (!m || m.length < 3) return null;
++      return [+m[0], +m[1], +m[2], m.length > 3 ? +m[3] : 1];
++    } catch (e) { return null; }
++  }
++  function lum(c) {
++    if (!c) return null;
++    var v = [c[0], c[1], c[2]].map(function (x) {
++      x = x / 255;
++      return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
++    });
++    return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
++  }
++  function contrast(a, b) {
++    var L1 = lum(a), L2 = lum(b);
++    if (L1 == null || L2 == null) return 99;
++    return (Math.max(L1, L2) + 0.05) / (Math.min(L1, L2) + 0.05);
++  }
++  /** 把各级半透明底色真正合成成"最终看到的颜色" */
++  function effBg(el) {
++    var stack = [], n = el;
++    while (n && n !== document.documentElement) {
++      var c = toRGBA(getComputedStyle(n).backgroundColor);
++      if (c && c[3] > 0) stack.push(c);
++      n = n.parentElement;
++    }
++    stack.push(toRGBA(getComputedStyle(document.documentElement).backgroundColor) || [10, 10, 10, 1]);
++    stack.push([255, 255, 255, 1]);
++    var out = [0, 0, 0, 1];
++    for (var i = stack.length - 1; i >= 0; i--) {
++      var c2 = stack[i], a = c2[3];
++      out[0] = c2[0] * a + out[0] * (1 - a);
++      out[1] = c2[1] * a + out[1] * (1 - a);
++      out[2] = c2[2] * a + out[2] * (1 - a);
++    }
++    return out;
++  }
++  function rgbStr(c) { return 'rgb(' + Math.round(c[0]) + ',' + Math.round(c[1]) + ',' + Math.round(c[2]) + ')'; }
++  function toHSL(c) {
++    var r = c[0] / 255, g = c[1] / 255, b = c[2] / 255;
++    var mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, h = 0, s = 0;
++    if (mx !== mn) {
++      var d = mx - mn;
++      s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
++      if (mx === r) h = (g - b) / d + (g < b ? 6 : 0);
++      else if (mx === g) h = (b - r) / d + 2;
++      else h = (r - g) / d + 4;
++      h /= 6;
++    }
++    return [h, s, l];
++  }
++  function fromHSL(h, s, l) {
++    function f(p, q, t) {
++      if (t < 0) t += 1;
++      if (t > 1) t -= 1;
++      if (t < 1 / 6) return p + (q - p) * 6 * t;
++      if (t < 1 / 2) return q;
++      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
++      return p;
++    }
++    var r, g, b;
++    if (s === 0) { r = g = b = l; }
++    else {
++      var q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
++      r = f(p, q, h + 1 / 3); g = f(p, q, h); b = f(p, q, h - 1 / 3);
++    }
++    return [r * 255, g * 255, b * 255, 1];
++  }
++
++  /** 1. 对比度修正：保色相只调亮度，直到达标（"看不清 / 黑框无字"的根治）
++   *  三个必须做对的地方（都踩过）：
++   *   · 文字自身带透明度时（如 oklab(… / 0.6)）要**先与底色合成**再算对比度，否则误判为达标
++   *   · 上游可能用 !important 覆盖 → 必须 setProperty(…, 'important')
++   *   · 框架重渲染会抹掉内联样式 → **不做永久跳过**，每轮重新校验、不达标就再修
++   */
++  function passContrast() {
++    var all = document.querySelectorAll('body *');
++    for (var i = 0; i < all.length; i++) {
++      var el = all[i];
++      if (el.children.length) continue;                       // 只看文字叶子
++      var txt = (el.textContent || '').trim();
++      if (!txt) continue;
++      if (!vis(el)) continue;
++      var cs = getComputedStyle(el);
++      if (isIconFont(cs)) continue;
++      var fg = toRGBA(cs.color);
++      if (!fg) continue;
++      var bg = effBg(el);
++      // 文字半透明 → 先合成到"实际看到的颜色"
++      var a = fg[3];
++      var fgEff = [fg[0] * a + bg[0] * (1 - a), fg[1] * a + bg[1] * (1 - a), fg[2] * a + bg[2] * (1 - a), 1];
++      var r0 = contrast(fgEff, bg);
++      if (r0 >= CONTRAST_MIN) continue;
++      var hsl = toHSL([fgEff[0], fgEff[1], fgEff[2], 1]), bgL = lum(bg);
++      var darken = bgL != null && bgL > 0.45;                 // 浅底→调暗；深底→调亮
++      var best = null;
++      for (var step = 1; step <= 25; step++) {
++        var l = darken ? Math.max(0, hsl[2] - step * 0.04) : Math.min(1, hsl[2] + step * 0.04);
++        var cand = fromHSL(hsl[0], hsl[1], l);
++        if (contrast(cand, bg) >= CONTRAST_MIN + 0.1) { best = cand; break; }
++      }
++      // 保色相调亮度失败时（白字压橙底这类：文字已到极值，再怎么调都不够）→ 直接取黑白中更清楚的那个
++      if (!best) {
++        var white = [255, 255, 255, 1], black = [17, 17, 17, 1];
++        best = contrast(black, bg) >= contrast(white, bg) ? black : white;
++      }
++      if (contrast(best, bg) < CONTRAST_MIN) {
++        // 兜底：连纯黑/纯白都不够 → 调深/调浅底色（只动背景，不动其他文字）
++        var bgHsl = toHSL(bg), bDark = bgL != null && bgL > 0.45;
++        for (var s2 = 1; s2 <= 25; s2++) {
++          var l2 = bDark ? Math.max(0, bgHsl[2] - s2 * 0.04) : Math.min(1, bgHsl[2] + s2 * 0.04);
++          var bg2 = fromHSL(bgHsl[0], bgHsl[1], l2);
++          if (contrast(best, bg2) >= CONTRAST_MIN + 0.1) {
++            try { el.style.setProperty('background-color', rgbStr(bg2), 'important'); } catch (e2) {}
++            stats.contrastBg = (stats.contrastBg || 0) + 1;
++            break;
++          }
++        }
++      }
++      try { el.style.setProperty('color', rgbStr(best), 'important'); }
++      catch (e) { el.style.color = rgbStr(best); }
++      el.setAttribute('data-pf-cr', r0.toFixed(1));
++      stats.contrast++;
++    }
++  }
++
++  /** 2. 截断揭示：容器 overflow:hidden 而内容更大 → 改为可滚动（内容不再摸不到） */
++  function passReveal() {
++    var all = document.querySelectorAll('body *');
++    for (var i = 0; i < all.length; i++) {
++      var el = all[i];
++      if (el.getAttribute('data-pf-rv')) continue;
++      el.setAttribute('data-pf-rv', '1');
++      if (!vis(el)) continue;
++      var cs = getComputedStyle(el), r = el.getBoundingClientRect();
++      if (r.width < 80) continue;
++      // 单行省略号类交给 passUnclip（改成换行更自然），这里只管结构性截断
++      var textish = cs.whiteSpace === 'nowrap' || cs.textOverflow === 'ellipsis';
++      if (cs.overflowX === 'hidden' && !textish && el.scrollWidth > el.clientWidth + 4) {
++        el.style.overflowX = 'auto';
++        el.style.webkitOverflowScrolling = 'touch';
++        stats.reveal++;
++      }
++      if (cs.overflowY === 'hidden' && el.scrollHeight > el.clientHeight + 4 && el.clientHeight > 8) {
++        el.style.overflowY = 'auto';
++        stats.reveal++;
++      }
++    }
++  }
++
++  /** 3. 超出视口的元素 → 用百分比约束 */
++  function passWidth() {
++    var list = document.querySelectorAll('body *');
++    for (var i = 0; i < list.length; i++) {
++      var el = list[i];
++      if (el.getAttribute('data-pf-w')) continue;
++      el.setAttribute('data-pf-w', '1');
++      if (isIconFont(getComputedStyle(el))) continue;
++      var r = el.getBoundingClientRect();
++      if (r.width < vw() + 2 || inScroller(el)) continue;
++      el.style.maxWidth = '100%';
++      el.style.width = 'auto';
++      stats.width++;
++    }
++  }
++
++  /** 4. 行结尾是不是"带文字的按钮组"（要优先整组落到下一行的那种）。
++   *  只认有文字的按钮/链接：面板头部的纯图标按钮组不算，免得把标题栏拆散。 */
++  function trailingLabeledControls(el) {
++    var last = el.lastElementChild;
++    if (!last) return null;
++    if (getComputedStyle(last).position !== 'static') return null;
++    var kids = last.querySelectorAll ? last.querySelectorAll('button, a[href]') : [];
++    for (var i = 0; i < kids.length; i++) {
++      if ((kids[i].textContent || '').trim().length >= 2) return last;
++    }
++    return null;
++  }
++
++  /** 5. 行空间不够 → 让这一行换行（逐行实测；脱离文档流的子元素不计） */
++  function passWrap() {
++    var list = document.querySelectorAll('body *');
++    for (var i = 0; i < list.length; i++) {
++      var el = list[i];
++      if (el.getAttribute('data-pf-wrap')) continue;
++      el.setAttribute('data-pf-wrap', '1');
++      var cs = getComputedStyle(el);
++      var disp = cs.display;
++      if (disp.indexOf('flex') < 0 && disp.indexOf('grid') < 0) continue;
++      // ❗只管"行容器"。column flex 加 wrap = 内容换到第二"列"——实测回归：
++      // 壳的 .app 是 column，promote 误触发后 main 整块被折到 x=211，左半空死区、右半裁切。
++      if (cs.flexDirection === 'column' || cs.flexDirection === 'column-reverse') continue;
++      // 自身就是横向滚动条的元素（标签条）绝不能动
++      if (cs.overflowX === 'auto' || cs.overflowX === 'scroll') continue;
++      if (el.children.length < 2 || inScroller(el)) continue;
++      if (cs.flexWrap === 'wrap') continue;
++      var rowRect = el.getBoundingClientRect();
++      var rowRight = rowRect.right - (parseFloat(cs.paddingRight) || 0);
++      var flowKids = 0, clippedChild = false, overflows = false, firstKid = null;
++      for (var k = 0; k < el.children.length; k++) {
++        var c = el.children[k], ccs = getComputedStyle(c), cr = c.getBoundingClientRect();
++        if (ccs.position === 'absolute' || ccs.position === 'fixed') continue;
++        if (!firstKid) firstKid = c;
++        flowKids++;
++        if (cr.right > rowRight + 2) overflows = true;
++        if (c.scrollWidth > c.clientWidth + 2 && /nowrap|hidden|clip/.test(ccs.whiteSpace + ccs.overflowX)) clippedChild = true;
++      }
++      if (flowKids < 2) continue;
++      // 除"真放不下"外，还有一种情况要主动换行：行 = 长文字 + 带文字的按钮组。
++      // 手机上这两样挤在一行，文字会被压成窄条、按钮被挤出屏 —— 把按钮整组落到下一行。
++      var promote = false;
++      if (!overflows && !clippedChild && boxW(el) < 480) {
++        var grp = trailingLabeledControls(el);
++        if (grp && firstKid && (firstKid.textContent || '').trim().length >= 6) promote = true;
++      }
++      if (overflows || clippedChild || promote) {
++        el.style.flexWrap = 'wrap';
++        if (!el.style.rowGap) el.style.rowGap = '8px';
++        stats.wrap++;
++      }
++    }
++  }
++
++  /** 6. 文字被裁切 → 允许换行 */
++  function passUnclip() {
++    var list = document.querySelectorAll('body *');
++    for (var i = 0; i < list.length; i++) {
++      var el = list[i];
++      if (el.getAttribute('data-pf-unclip')) continue;
++      if (el.children.length || !(el.textContent || '').trim()) { el.setAttribute('data-pf-unclip', '1'); continue; }
++      var cs = getComputedStyle(el);
++      if (isIconFont(cs)) { el.setAttribute('data-pf-unclip', '1'); continue; }
++      if (el.scrollWidth > el.clientWidth + 2 && /nowrap/.test(cs.whiteSpace)) {
++        el.style.whiteSpace = 'normal';
++        el.style.overflow = 'visible';
++        el.style.textOverflow = 'clip';
++        stats.unclip++;
++      }
++      el.setAttribute('data-pf-unclip', '1');
++    }
++  }
++
++  /** 7. 宽表格 → 包一层横向滚动容器 */
++  function passScroll() {
++    var list = document.querySelectorAll('pre, table');
++    for (var i = 0; i < list.length; i++) {
++      var el = list[i];
++      if (el.getAttribute('data-pf-scroll')) continue;
++      el.setAttribute('data-pf-scroll', '1');
++      var p = el.parentElement;
++      if (!p || inScroller(el)) continue;
++      if (el.scrollWidth <= p.clientWidth + 2) continue;
++      try {
++        var box = document.createElement('div');
++        box.style.overflowX = 'auto';
++        box.style.webkitOverflowScrolling = 'touch';
++        box.style.maxWidth = '100%';
++        p.insertBefore(box, el);
++        box.appendChild(el);
++        stats.scroll++;
++      } catch (e) {}
++    }
++  }
++
++  /** 8. 栅格放不下 → 收成单列（这是"一行变两列"那个 bug 的正解：
++   *   屏窄时该做的是**堆叠**，不是把卡片压成多列）
++   *   两个判据，都基于实测而不是猜：
++   *     · 轨道比容器还宽 → 内容必然被右切（如 free-pool-body 内联写了 minmax(420px,1fr)）
++   *     · 轨道被压到 <200px，且格子里有控件/长文 → 内容已经被压扁
++   *   无控件的短文字格子（如数字统计行）不动 —— 那不是被压扁，是本来就该并排。
++   */
++  function passStack() {
++    var list = document.querySelectorAll('body *');
++    for (var i = 0; i < list.length; i++) {
++      var el = list[i];
++      if (el.getAttribute('data-pf-stack')) continue;
++      var cs = getComputedStyle(el);
++      if (cs.display !== 'grid') continue;
++      if (cs.overflowX === 'auto' || cs.overflowX === 'scroll') continue;
++      var tracks = (cs.gridTemplateColumns || '').trim().split(/\s+/).filter(Boolean);
++      if (!tracks.length) continue;
++      var box = boxW(el);
++      if (box < 40) continue;                       // 还没布局好 —— 不标记，下轮再看（曾因先标记而永久错过）
++      var track0 = parseFloat(tracks[0]) || 0;
++      var over = track0 > box + 2;
++      var crushed = false;
++      if (tracks.length > 1 && track0 < CRUSH_MIN) {
++        for (var k = 0; k < el.children.length; k++) {
++          var c = el.children[k];
++          var hasCtl = c.querySelector && !!c.querySelector('button, a[href], input, select, textarea, [role="switch"]');
++          if (hasCtl || (c.textContent || '').trim().length > 40) { crushed = true; break; }
++        }
++      }
++      if (over || crushed) {
++        try { el.style.setProperty('grid-template-columns', 'minmax(0, 1fr)', 'important'); } catch (e) {}
++        stats.stack++;
++      }
++      el.setAttribute('data-pf-stack', '1');
++    }
++  }
++
++  function passCdLoading() {
++    var m = /[?&]p=credit/.exec(location.search || '');
++    if (!m && location.port !== '47860') return;
++    setTimeout(function () {
++      var all = document.querySelectorAll('body *');
++      for (var i = 0; i < all.length; i++) {
++        var el = all[i];
++        if (el.children.length > 4) continue;
++        var t = (el.textContent || '').trim();
++        if (t.indexOf('CreditDaddy') < 0) continue;
++        var r = el.getBoundingClientRect();
++        if (r.width < 40 || r.height < 20) continue;
++        if (r.width > window.innerWidth * 0.8) continue;
++        var cs = getComputedStyle(el);
++        if (cs.position !== 'fixed' && cs.position !== 'absolute') continue;
++        try { el.style.setProperty('display', 'none', 'important'); } catch (e) {}
++        stats.reveal++;
++        break;
++      }
++    }, 8000);
++  }
++
++  /** 11. 横向可滑的标签条 —— 能滑 ≠ 看得出能滑。
++   *  实测（360px，CD v1.5.2 仪表盘）：产品标签条 scrollWidth=912 / clientWidth=334，
++   *  9 个标签只露出 3 个，ZCode/Trae/MiniMax/网页会话/10Router 全在屏外；
++   *  安卓 WebView 的覆盖式滚动条不滚动手就不出现 → 用户直接以为这些产品不存在（功能不可达级的问题）。
++   *  只做容器级视觉暗示：滚动条常驻可见 + 右缘渐隐 + 滑到底取消渐隐。
++   *  ❗不让它换行、不改任何控件尺寸：passWrap 里"滚动条元素绝不能动"那条守卫的理由依然成立，
++   *    标签条横向滑是上游刻意设计，我们要补的是"暗示"，不是替上游改设计。 */
++  function passTabHint() {
++    var list = document.querySelectorAll('nav, div');
++    for (var i = 0; i < list.length; i++) {
++      var el = list[i];
++      if (el.getAttribute('data-pf-tab')) continue;
++      el.setAttribute('data-pf-tab', '1');
++      var cs = getComputedStyle(el);
++      if (cs.overflowX !== 'auto' && cs.overflowX !== 'scroll') continue;
++      var r = el.getBoundingClientRect();
++      if (r.width < 120 || r.height < 20 || r.height > 96) continue;          // 只管"条"，不碰大块区域
++      if (el.scrollWidth <= el.clientWidth * 1.25) continue;                  // 溢出不足 25% 不值得提示
++      var tabs = el.querySelectorAll(':scope > a, :scope > button, :scope > * > a, :scope > * > button');
++      if (tabs.length < 4) continue;                                          // 少于 4 个选项不算标签条
++      el.classList.add('pf-tabscroll');
++      var mark = function () {
++        var max = el.scrollWidth - el.clientWidth;
++        if (el.scrollLeft >= max - 4) el.classList.remove('pf-tabmore');
++        else el.classList.add('pf-tabmore');
++      };
++      try { el.addEventListener('scroll', mark, { passive: true }); }
++      catch (e) { el.addEventListener('scroll', mark); }
++      mark();
++      stats.tabhint = (stats.tabhint || 0) + 1;
++    }
++  }
++
++  /** 12. 语言按钮的国旗必须与界面实际语言一致（只修显示，绝不代用户写 cookie）。
++   *  上游 src/shared/components/HeaderLanguage.js：
++   *      getLocaleFromCookie() 在没有 locale cookie 时 return "en"
++   *  而我们的下游补丁把 DEFAULT_LOCALE 定成 zh-CN —— 于是新装机上【界面是中文、按钮是 🇺🇸、
++   *  title 还是英文 "Language"】，用户会以为自己是英文界面或语言坏了（360px 实测复现）。
++   *  判据用"实际渲染出来的文字"，不看 html lang（SSR 那份恒为 en，正是它骗人）。 */
++  function passLangFlag() {
++    if (/;\s*locale=|^\s*locale=/.test(document.cookie || '')) return;   // 用户自己选过语言 → 完全尊重上游
++    var probe = document.querySelectorAll('aside nav a, nav a, h1, h2, .material-symbols-outlined ~ span');
++    var tot = 0, zh = 0;
++    for (var i = 0; i < probe.length && tot < 40; i++) {
++      var t = (probe[i].textContent || '').trim();
++      if (!t || t.length > 24) continue;
++      tot++;
++      if (/[\u4e00-\u9fa5]/.test(t)) zh++;
++    }
++    if (tot < 6) return;                                   // 还判不出语言，别乱动
++    var btns = document.querySelectorAll('button[title="Language"], button[data-i18n-skip]');
++    for (var j = 0; j < btns.length; j++) {
++      var b = btns[j], sp = b.querySelector('span');
++      if (!sp) continue;
++      var s = (sp.textContent || '').trim();
++      var cp = s.length ? s.codePointAt(0) : 0;
++      var isFlag = s.length >= 2 && cp >= 0x1F1E6 && cp <= 0x1F1FF;
++      if (!isFlag && s !== '🌐') continue;                     // 只认国旗按钮，别误伤其它图标按钮
++      // ⚠️ 只在"真的不一样"时写：写 textContent 是 childList 变更，会被本补丁自己的
++      // MutationObserver 再抓到 —— 无条件赋值 = 无限重跑（自我触发的活锁）。
++      var want = (zh / tot >= 0.5) ? '🇨🇳' : null;
++      var wantTitle = (zh / tot >= 0.5) ? '语言：简体中文（点击切换）' : '语言（点击切换）';
++      var touched = false;
++      if (want && s !== want) { sp.textContent = want; touched = true; }
++      if (b.title !== wantTitle) { b.title = wantTitle; touched = true; }
++      if (touched) stats.langflag = (stats.langflag || 0) + 1;
++    }
++  }
++
++  /** 13. 竖排可点项的"节距"补到 44px —— 只加间距，绝不碰控件本身。
++   *  实测（360px）：10R 每个页面都有 17~33 个高度 <40px 的可点元素，几乎全在侧栏/抽屉的
++   *  竖排菜单里（上游用 py-1 → 实测 28px 高、行间 2px）。手机拇指的可靠命中区约 44px，
++   *  28px + 2px 间隙 = 连点相邻两项极易误触。
++   *  为什么不动控件高度：补丁铁律②「绝不改控件尺寸/形态」—— 曾把 32×16 的开关撑成 36×36
++   *  变成圆，同页另一种开关仍是长条，用户当场指出"他们应该保持一个形态"。
++   *  所以这里只改容器的 row-gap：把 (节距 = 项高 + 间隙) 补到 ≥44px，项本身一寸没动。
++   *  守卫：只在窄屏、只在竖排、至少 4 个同宽可点子项、且容器可滚或位于 nav/aside 内才动手。 */
++  var PITCH_MIN = 46;   // 目标节距取 46 而不是 44：margin 取整会掉 1px，实测补 14 只到 43
++  function passPitch() {
++    if (vw() > 520) return;
++    // v1.11.11：本 pass 只作用于 CreditDaddy 面板。10R 网关面板加节距后被用户实测为负优化
++    // （"文字之间看不完全"、且"房子图标与底层文字的重合本来是对的"）—— 10R 侧栏保持上游原样。
++    // 判定 CD：标题含 CreditDaddy/额度管家，或 URL 落在额度面板端口（47860 或 47xxx）。
++    var onCD = /creditdaddy|额度管家/i.test(document.title)
++            || /[:\/]47\d{3,4}[:\/]/.test(location.href);
++    if (!onCD) return;
++    var list = document.querySelectorAll('nav, aside, div');
++    for (var i = 0; i < list.length; i++) {
++      var el = list[i];
++      if (el.getAttribute('data-pf-pitch')) continue;
++      el.setAttribute('data-pf-pitch', '1');
++      var cs = getComputedStyle(el);
++      var isFlexCol = (cs.display === 'flex' && cs.flexDirection === 'column');
++      if (cs.display !== 'block' && !isFlexCol) continue;      // 只管竖排
++      // 取"参与竖排的流子项"，并识别其中的可点项（a/button，或被单层 div 包着的 a/button）
++      var rows = [];
++      for (var k = 0; k < el.children.length; k++) {
++        var c = el.children[k], ccs = getComputedStyle(c);
++        if (ccs.position === 'absolute' || ccs.position === 'fixed') continue;
++        var cr = c.getBoundingClientRect();
++        if (cr.width <= 0 || cr.height <= 0) continue;
++        var hit = (/^A$|^BUTTON$/.test(c.tagName)) ? c
++                : (c.children.length <= 2 ? c.querySelector(':scope > a, :scope > button') : null);
++        if (!hit) continue;
++        rows.push({ flow: c, hit: hit, top: cr.top, bottom: cr.bottom, h: cr.height, w: cr.width });
++      }
++      if (rows.length < 4) continue;
++      var h0 = rows[0].h, w0 = rows[0].w;
++      if (h0 <= 0 || h0 >= PITCH_MIN) continue;                 // 本来就够高，别管
++      var uniform = true;
++      for (var m = 1; m < rows.length; m++) {                   // 只处理"同宽同高的重复菜单项"，避免误伤工具条
++        if (Math.abs(rows[m].w - w0) > 14 || Math.abs(rows[m].h - h0) > 8) { uniform = false; break; }
++      }
++      if (!uniform) continue;
++      var fixed = 0;
++      for (var p = 1; p < rows.length; p++) {
++        var pitch = rows[p].top - rows[p - 1].top;             // 节距 = 相邻两项顶边之差（项高 + 间隙）
++        var need = PITCH_MIN - pitch;
++        if (need <= 1) continue;
++        try {
++          if (isFlexCol) {                                      // flex：加在容器 gap 上（一次到位）
++            el.style.setProperty('row-gap', (parseFloat(cs.rowGap) || 0) + need + 'px', 'important');
++            break;                                              // flex 的 gap 对全组生效，不必逐个子项
++          }
++          // block（上游用 space-y-* = 子项 margin-top）：只能逐个子项补差值
++          var fm = getComputedStyle(rows[p].flow).marginTop;
++          var cur = parseFloat(fm) || 0;
++          rows[p].flow.style.setProperty('margin-top', Math.round(cur + need) + 'px', 'important');
++          fixed++;
++        } catch (e) { break; }
++      }
++      if (fixed || isFlexCol) stats.pitch = (stats.pitch || 0) + 1;
++    }
++  }
++
++  /* 网关面板：只放行两条产品规则（隧道入口隐藏 / 面板内更新按钮隐藏），
++     其余排版类 pass 全部不跑 —— 用户指令"网关的补丁只保留侧栏颜色"。
++  /* 无开关：这份脚本随 CD 源码走，永远生效。 */
++  function off(name) { return false; }
++
++  function run() {
++    try { if (!off('pad')) passStack(); } catch (e) {}
++    try { if (!off('width')) passWidth(); } catch (e) {}
++    try { if (!off('wrap')) passWrap(); } catch (e) {}
++    try { if (!off('reveal')) passReveal(); } catch (e) {}
++    try { if (!off('unclip')) passUnclip(); } catch (e) {}
++    try { if (!off('contrast')) passContrast(); } catch (e) {}
++    try { if (!off('scroll')) passScroll(); } catch (e) {}
++    try { if (!off('cdLoading')) passCdLoading(); } catch (e) {}
++    try { if (!off('tabhint')) passTabHint(); } catch (e) {}
++    try { if (!off('langflag')) passLangFlag(); } catch (e) {}
++    try { if (!off('pitch')) passPitch(); } catch (e) {}
++    window.__panelFixRuns = (window.__panelFixRuns || 0) + 1;
++    window.__panelFixLastAt = Date.now();
++
++    /* 告知原生"适配已生效、可以露出页面了"（壳据此揭开加载遮罩）。
++       只在页面已经有真内容时报 —— 骨架屏阶段就报等于把空白页揭给用户看。
++       浏览器里（没有 Native）静默跳过；报一次就不再重复，避免每轮 Mutation 都跨语言通信。 */
++    if (!window.__panelFixTold && window.Native && window.Native.patchApplied) {
++      try {
++        var b = document.body;
++        if (b && b.querySelectorAll('*').length >= 60 && (b.innerText || '').replace(/\s+/g, '').length >= 120) {
++          window.__panelFixTold = true;
++          window.Native.patchApplied();
++        }
++      } catch (e) {}
++    }
++  }
++  window.__panelFixRun = run;
++
++  var timer = null;
++  function schedule() { if (timer) clearTimeout(timer); timer = setTimeout(run, 120); }
++  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run);
++  else run();
++  window.addEventListener('resize', schedule);
++  window.addEventListener('orientationchange', schedule);
++  setTimeout(run, 400);
++  setTimeout(run, 1200);
++  try { new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true }); } catch (e) {}
++
++  /* v1.11.11：SPA 路由切换后内容分片挂载，单次 run 常在布局完成前量错（clientHeight/scrollHeight
++     不准）→ 关键按钮的 reveal/unclip 没生效 = 用户说的"时灵时不灵"。
++     做法：监听 popstate，并周期性比对 location.href；一旦变化，错峰重跑 run（200/600/1500/3000ms）
++     覆盖分片挂载的尾段。不靠路由框架，纯 URL 比对，对所有上游都安全。 */
++  var _lastHref = location.href;
++  function onRouteMaybe() {
++    if (location.href === _lastHref) return;
++    _lastHref = location.href;
++    [200, 600, 1500, 3000].forEach(function (d) { setTimeout(run, d); });
++  }
++  window.addEventListener('popstate', onRouteMaybe);
++  window.addEventListener('hashchange', onRouteMaybe);
++  setInterval(onRouteMaybe, 700);
++})();
++
++</script>
+ </body>
+ </html>
+ 

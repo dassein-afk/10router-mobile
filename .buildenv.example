@@ -1,0 +1,14 @@
+# 构建机配置 —— 复制成 .buildenv 后按实际情况填写（.buildenv 不进仓）
+#
+# 构建机要求：x86_64 Linux，已装好 Android SDK（build-tools;34.0.0 + platforms;android-34）、
+# Node 20+、npm、zip/unzip、python3，并且能在本地执行 `npm run build`。
+# 首次使用前在构建机上跑一次上游 `npm install`，之后 build-android.sh 会复用它的 node_modules。
+
+# 构建机 SSH 地址
+export TCLOUD=user@your-build-host
+
+# SSH 私钥
+export KEY=$HOME/.ssh/id_ed25519
+
+# 构建机上的工作目录（脚本会往里推源码与产物）
+# 默认 /home/<user>/10droid，路径不同时在脚本顶部改 B。

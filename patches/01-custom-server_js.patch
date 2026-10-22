@@ -1,0 +1,29 @@
+--- a/custom-server.js
++++ b/custom-server.js
+@@ -6,6 +6,26 @@
+ 
+ const origCreate = http.createServer.bind(http);
+ 
++// 安卓壳（10Router Android APK）专用：父进程（App）死了就自杀。
++// 否则 App 被系统杀死后 node 可能残留成孤儿，占着 20128 端口：新实例绑定失败、
++// 旧孤儿又不再应答 → 用户看到"网关进程在、API 不通"。设了 ANDROID_PARENT_PID 才生效。
++if (process.env.ANDROID_PARENT_PID) {
++  const parent = Number(process.env.ANDROID_PARENT_PID);
++  if (Number.isFinite(parent) && parent > 0) {
++    const timer = setInterval(() => {
++      try {
++        if (process.ppid !== parent) {
++          console.log("[android] 父进程已退出（ppid=" + process.ppid + "），node 自杀释放端口");
++          process.exit(0);
++        }
++      } catch {
++        process.exit(0);
++      }
++    }, 5000);
++    timer.unref();
++  }
++}
++
+ // Per-process secret proving x-10r-real-ip was stamped below rather than sent by the client.
+ // A bare `next start` / `next dev` never loads this file, so it cannot produce a matching
+ // header even though the env var is inherited by child processes. Named like x-9r-cli-token

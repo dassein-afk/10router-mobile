@@ -1,0 +1,111 @@
+name: build-apk-release
+# tag v1.5.2 -> versionName 1.5.2, versionCode 10502; also runnable manually.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: "versionName (e.g. 1.5.2)"
+        required: true
+        default: "1.5.2"
+      version_code:
+        description: "versionCode (leave 0 = auto from version_name)"
+        required: true
+        default: "0"
+      router_tag:
+        description: "10Router tag to bundle (empty = latest release)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: apt deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openjdk-17-jdk-headless binutils zip unzip python3-pil >/dev/null
+
+      - name: Android SDK (build-tools 34 + platform 34)
+        run: |
+          set -euo pipefail
+          export ANDROID_HOME="$HOME/android-sdk"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          curl -fsSLo /tmp/clt.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q /tmp/clt.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;34.0.0" "platforms;android-34" >/dev/null
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: resolve version
+        id: ver
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            NAME="${{ github.event.inputs.version_name }}"
+            CODE="${{ github.event.inputs.version_code }}"
+            if [ "$CODE" = "0" ]; then
+              IFS=. read a b c <<<"$NAME"; CODE=$((10#$a*10000 + 10#$b*100 + 10#$c))
+            fi
+          else
+            NAME="${GITHUB_REF_NAME#v}"; CODE=0
+            IFS=. read a b c <<<"$NAME"; CODE=$((10#$a*10000 + 10#$b*100 + 10#$c))
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+
+      - name: build APK
+        id: build
+        env:
+          VERSION_NAME: ${{ steps.ver.outputs.name }}
+          VERSION_CODE: ${{ steps.ver.outputs.code }}
+          ROUTER_TAG: ${{ github.event.inputs.router_tag }}
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASS }}
+        run: bash build/ci_build.sh
+
+      - name: create/refresh GitHub Release
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APK: ${{ steps.build.outputs.apk }}
+          SHA256: ${{ steps.build.outputs.sha256 }}
+          SIZE: ${{ steps.build.outputs.size }}
+          NAME: ${{ steps.ver.outputs.name }}
+        run: |
+          set -euo pipefail
+          TAG="v$NAME"
+          cat > notes.md <<EOF
+          10Router Android **v$NAME** — self-contained APK: Termux arm64 Node 24 runtime + 10Router gateway.
+
+          - Size: $SIZE bytes · SHA-256: \`$SHA256\`
+          - Install: download → allow "unknown sources" → open app → wait for first-launch extraction → set dashboard password
+          - API base for clients on this phone: \`http://127.0.0.1:20128/v1\`
+          - arm64 / Android 7.0+. Data lives in app-private dir; uninstall = clean wipe.
+          EOF
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --clobber
+            gh release edit "$TAG" --notes-file notes.md
+          else
+            gh release create "$TAG" "$APK" --title "Android $NAME" --notes-file notes.md --target "${{ github.sha }}"
+          fi
+
+      - name: upload workflow artifact (backup copy)
+        uses: actions/upload-artifact@v4
+        with:
+          name: 10router-android-${{ steps.ver.outputs.name }}
+          path: ${{ steps.build.outputs.apk }}
+          retention-days: 30

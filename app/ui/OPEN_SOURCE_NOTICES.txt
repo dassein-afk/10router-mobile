@@ -1,0 +1,85 @@
+开源许可与鸣谢 / Open Source Notices
+====================================
+
+本应用（10Router 安卓版）是把两个独立的开源项目打包进同一个 Android APK 的集成产物。
+本应用外壳（打包层）与两个上游项目均为 MIT 许可。以下按各自原文照录。
+
+
+1) 10Router —— 本地 AI 路由网关与仪表盘
+---------------------------------------
+项目：https://github.com/techysy/10router
+许可：MIT License
+在本应用中：网关本体，后台服务 127.0.0.1:20128，界面中的「网关」页。
+随包署名文件：assets/bootstrap.zip 内的 app/LICENSE
+
+    MIT License
+
+    Copyright (c) 2024-2026 decolua, techysy and contributors
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+
+2) CreditDaddy —— 额度管家
+--------------------------
+项目：https://github.com/techysy/CreditDaddy
+许可：MIT License
+在本应用中：额度管家，后台服务 127.0.0.1:47860，界面中的「额度」页。
+随包署名文件：assets/cd.zip 内的 cd/LICENSE
+
+    MIT License
+
+    Copyright (c) 2026 CreditDaddy contributors
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+
+3) 运行时与依赖
+--------------
+本应用内置一个 Termux（aarch64 / bionic）Node.js 运行时，由 Termux 仓库的二进制包解包
+而来（nodejs、libicu、openssl、libsqlite、c-ares、libuv、libnghttp2、ca-certificates
+及其传递依赖），各自遵循其上游许可，详见 https://github.com/termux/termux-packages 。
+这些包仅作为独立的运行时，本工程不修改、不链接其源码。
+
+两个上游软件各自的 npm 依赖随 .next/standalone 与 cd/ 一同分发，每个依赖的许可见
+其内部 node_modules/<包名>/LICENSE* 文件。
+
+
+4) 名称
+------
+「10Router」与「CreditDaddy」均为上游项目 techysy 的名称，本应用仅在说明「内含哪个
+上游软件」时使用，不主张任何商标权利。
+
+完整清单（含本工程自身的 MIT 许可）：
+https://github.com/dassein-afk/10router-android/blob/master/THIRD_PARTY_NOTICES.md

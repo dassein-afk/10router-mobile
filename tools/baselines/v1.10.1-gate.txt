@@ -1,0 +1,116 @@
+========================================================================
+用例                                           结论        
+------------------------------------------------------------------------
+cd/dashboard|320x620|dark                    PASS      
+    · 低对比文字: 36 → 0 ✓改善
+    · clip: 2 → 0 ✓改善
+    · small: 15 → 0 ✓改善
+    · tiny: 16 → 0 ✓改善
+cd/dashboard|360x694|dark                    PASS      
+    · 低对比文字: 36 → 0 ✓改善
+    · clip: 2 → 0 ✓改善
+    · small: 16 → 0 ✓改善
+    · tiny: 16 → 0 ✓改善
+cd/dashboard|360x694|light                   PASS      
+    · 低对比文字: 36 → 0 ✓改善
+    · clip: 2 → 0 ✓改善
+    · small: 16 → 0 ✓改善
+    · tiny: 16 → 0 ✓改善
+cd/settings|320x620|dark                     PASS      
+    · 低对比文字: 44 → 0 ✓改善
+    · clip: 2 → 0 ✓改善
+    · small: 20 → 0 ✓改善
+    · tiny: 19 → 0 ✓改善
+cd/settings|360x694|dark                     PASS      
+    · 低对比文字: 44 → 0 ✓改善
+    · clip: 2 → 0 ✓改善
+    · small: 21 → 0 ✓改善
+    · tiny: 19 → 0 ✓改善
+cd/settings|360x694|light                    PASS      
+    · 低对比文字: 44 → 0 ✓改善
+    · clip: 2 → 0 ✓改善
+    · small: 21 → 0 ✓改善
+    · tiny: 19 → 0 ✓改善
+cd/websession|320x620|dark                   PASS      
+    · 低对比文字: 11 → 0 ✓改善
+    · 结构性截断: 1 → 0 ✓改善
+    · over: 1 → 0 ✓改善
+    · small: 12 → 0 ✓改善
+    · tiny: 17 → 0 ✓改善
+cd/websession|360x694|dark                   PASS      
+    · 低对比文字: 11 → 0 ✓改善
+    · 结构性截断: 1 → 0 ✓改善
+    · over: 1 → 0 ✓改善
+    · small: 12 → 0 ✓改善
+    · tiny: 17 → 0 ✓改善
+cd/websession|360x694|light                  PASS      
+    · 低对比文字: 11 → 0 ✓改善
+    · 结构性截断: 1 → 0 ✓改善
+    · over: 1 → 0 ✓改善
+    · small: 12 → 0 ✓改善
+    · tiny: 17 → 0 ✓改善
+gw/dashboard|320x620|dark                    PASS      
+    · 低对比文字: 3 → 0 ✓改善
+    · clip: 1 → 0 ✓改善
+    · small: 1 → 0 ✓改善
+    · tiny: 19 → 0 ✓改善
+gw/dashboard|360x694|dark                    PASS      
+    · 低对比文字: 3 → 0 ✓改善
+    · small: 2 → 0 ✓改善
+    · tiny: 20 → 0 ✓改善
+gw/dashboard|360x694|light                   PASS      
+    · 低对比文字: 6 → 0 ✓改善
+    · small: 2 → 0 ✓改善
+    · tiny: 20 → 0 ✓改善
+gw/providers|320x620|dark                    PASS      
+    · 低对比文字: 6 → 0 ✓改善
+    · 结构性截断: 1 → 0 ✓改善
+    · over: 6 → 0 ✓改善
+    · small: 1 → 0 ✓改善
+    · tiny: 20 → 0 ✓改善
+gw/providers|360x694|dark                    PASS      
+    · 低对比文字: 6 → 0 ✓改善
+    · 结构性截断: 1 → 0 ✓改善
+    · over: 4 → 0 ✓改善
+    · small: 1 → 0 ✓改善
+    · tiny: 21 → 0 ✓改善
+gw/providers|360x694|light                   PASS      
+    · 低对比文字: 5 → 0 ✓改善
+    · 结构性截断: 1 → 0 ✓改善
+    · over: 4 → 0 ✓改善
+    · small: 1 → 0 ✓改善
+    · tiny: 21 → 0 ✓改善
+gw/quota|320x620|dark                        PASS      
+    · 低对比文字: 3 → 0 ✓改善
+    · clip: 5 → 2 ✓改善
+    · small: 17 → 0 ✓改善
+    · tiny: 42 → 0 ✓改善
+gw/quota|360x694|dark                        PASS      
+    · 低对比文字: 3 → 0 ✓改善
+    · clip: 3 → 1 ✓改善
+    · small: 23 → 0 ✓改善
+    · tiny: 52 → 0 ✓改善
+gw/quota|360x694|light                       PASS      
+    · 低对比文字: 5 → 0 ✓改善
+    · clip: 3 → 1 ✓改善
+    · small: 23 → 0 ✓改善
+    · tiny: 52 → 0 ✓改善
+gw/usage|320x620|dark                        PASS      
+    · 低对比文字: 4 → 0 ✓改善
+    · clip: 1 → 0 ✓改善
+    · small: 2 → 0 ✓改善
+    · tiny: 21 → 0 ✓改善
+gw/usage|360x694|dark                        PASS      
+    · 低对比文字: 4 → 0 ✓改善
+    · clip: 1 → 0 ✓改善
+    · small: 2 → 0 ✓改善
+    · tiny: 21 → 0 ✓改善
+gw/usage|360x694|light                       PASS      
+    · 低对比文字: 69 → 0 ✓改善
+    · clip: 1 → 0 ✓改善
+    · small: 2 → 0 ✓改善
+    · tiny: 21 → 0 ✓改善
+========================================================================
+
+✅ 门禁通过：21 个用例无回归
+   共 88 项指标改善

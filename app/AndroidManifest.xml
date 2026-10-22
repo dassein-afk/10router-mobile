@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="top.dassein.tenrouter"
+    android:versionCode="236"
+    android:versionName="0.0.1">
+
+    <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="28"/>
+
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
+
+    <application
+        android:label="10Router"
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@android:style/Theme.Material.NoActionBar"
+        android:usesCleartextTraffic="true"
+        android:allowBackup="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".GatewayService"
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="dataSync|microphone|specialUse">
+            <!-- 对标 Operit AI（AAswordman/Operit）：它的常驻服务声明 dataSync|microphone|specialUse，
+                 纯 dataSync 的 FGS 在鸿蒙/EMUI 上最容易被后台清理。specialUse 需要这个 subtype 说明。 -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Runs the user's self-hosted local AI gateway that other apps on this device call over HTTP; no standard foreground service type fully describes a local server kept alive at the user's request." />
+        </service>
+
+        <service
+            android:name=".WatchdogJob"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE"/>
+
+        <!-- 系统绑定锚点：把进程维持在"系统持有 binder 连接"的高优先级，而不是可随意回收的后台进程。
+             不需要任何厂商白名单；由用户一次性授予"通知使用权"。
+             本服务不实现任何通知读取回调，不获取/不存储任何通知内容。 -->
+        <service
+            android:name=".GatewayAnchorService"
+            android:exported="true"
+            android:label="10Router 系统加固"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService"/>
+            </intent-filter>
+        </service>
+
+        <!-- 最强守候通道：VpnService 是系统级网络组件，配"始终开启的 VPN"后系统会主动重启它。
+             本实现零路由（不 addRoute/addDnsServer），不接管任何流量，只借这个身份换取系统级存活待遇。
+             代价：Android 同时只允许一条 VPN，开启会顶掉手机现有 VPN（如 WireGuard）。 -->
+        <service
+            android:name=".VpnKeepAliveService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService"/>
+            </intent-filter>
+        </service>
+
+        <receiver android:name=".HealthReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="top.dassein.tenrouter.PING"/>
+            </intent-filter>
+        </receiver>
+
+        <receiver android:name=".BootReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
