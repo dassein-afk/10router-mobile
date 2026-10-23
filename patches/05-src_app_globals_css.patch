@@ -1,5 +1,5 @@
---- a/src/app/globals.css
-+++ b/src/app/globals.css
+--- orig/src/app/globals.css
++++ work/src/app/globals.css
 @@ -312,12 +312,16 @@
  
  /* macOS Vibrancy */
@@ -19,3 +19,41 @@
  }
  
  /* macOS Traffic Lights */
+@@ -608,3 +612,37 @@
+   border-top: 1px solid var(--color-border);
+   margin: 1.5rem 0;
+ }
++
++/* ==========================================================================
++   手机适配（源码级，勿删）—— 横向溢出兜底
++   --------------------------------------------------------------------------
++   症状：「端点与密钥」页底部出现横向滚动条，滑到最右是一大片空白。
++   根因：那一页里的地址行是 [标签 min-w-[88px] shrink-0] + [Input flex-1] +
++         [两个 shrink-0 的图标按钮] 的 flex 组合。手机宽度下，几个 shrink-0
++         的最小宽度之和已经超过容器，于是整行向右溢出；父级没有 overflow-x
++         裁剪，溢出量就变成文档宽度 → 出现横向滚动条，右侧是空白。
++   修法：在窄屏下允许这些行换行、让长串可以断开，从源头把宽度收住。
++         用 CSS 而不是逐个改 className——Tailwind 类名散落在多处，改一处漏三处；
++         一条规则覆盖所有同类行，也不会漏掉以后新增的行。
++   ========================================================================== */
++@media (max-width: 640px) {
++  /* 1) 任何 flex 行在窄屏都允许换行，禁止被 shrink-0 的子项撑破 */
++  .flex.items-center.gap-2,
++  .flex.items-center.gap-3 {
++    flex-wrap: wrap;
++  }
++  /* 2) shrink-0 的标签在换行后不再强制占一整行宽度 */
++  .shrink-0.min-w-\[88px\] {
++    min-width: 0;
++  }
++  /* 3) 输入框/代码串必须能断行，否则它自身就是溢出源 */
++  input, textarea, code, pre, .font-mono {
++    min-width: 0;
++    overflow-wrap: anywhere;
++  }
++  /* 4) 最后一道闸：主内容区不得横向滚动（裁掉残余溢出，不裁纵向） */
++  main, [role="main"] {
++    overflow-x: hidden;
++    max-width: 100%;
++  }
++}

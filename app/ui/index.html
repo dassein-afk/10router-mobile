@@ -92,6 +92,8 @@
   .btn:active{transform:translateY(1px);box-shadow:0 1px 4px rgba(0,0,0,.12)}
   .btn.ghost{background:var(--card2);color:var(--fg);border:1px solid var(--line);font-weight:600;box-shadow:none}
   .btn.ghost:active{transform:translateY(1px);opacity:.9}
+  /* 破坏性操作（彻底退出）用告警色，但只改前景色与边框，不动尺寸/形状 */
+  .btn.ghost.danger{color:var(--err);border-color:var(--err)}
   .btn.sm{padding:9px 13px;font-size:13px;width:auto;display:inline-block;white-space:nowrap;flex:0 0 auto}
   .btn[disabled]{opacity:.5}
   /* 进行中 / 成功态：只加颜色和转圈，不改字号、控件尺寸、形状（用户红线） */
@@ -169,7 +171,7 @@
   .chk details.why p{margin:0 0 6px;font-size:12.5px;line-height:1.55;color:var(--dim2)}
   .chk details.why p:last-child{margin-bottom:0}
 
-  /* 设置页「网页版」入口：**竖排**。
+  /* 设置页「面板地址」入口：**竖排**。
      这里原来是两个面板地址并排（flex 行、各占一半）—— 宽度规则是为"两列窄内容"设计的，
      换成一整条 URL 后，半宽会把地址折成三四行、按钮也被挤窄。竖排 + 每行自带按钮才是对的。 */
   .web-ports{display:flex;flex-direction:column;gap:8px;margin-bottom:9px}
@@ -179,6 +181,13 @@
   .web-ports .wp code{display:block;margin-top:2px;font-size:11.5px;color:var(--dim);overflow-wrap:anywhere}
   .web-ports .wpops{display:flex;gap:7px;margin-top:7px}
   .web-ports .wpops .btn{flex:1 1 0;min-width:0;justify-content:center;text-align:center}
+  /* 局域网地址：同一面板的第二条地址，开局域网访问时出现在本机地址下方。
+     grid 轨道用 minmax(0,1fr) 防止长 IP 撑破卡片；小标签 + 地址 + 复制按钮。 */
+  .web-ports .wplan{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;
+    gap:7px;margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
+  .web-ports .wplan .lb{font-size:11px;color:var(--dim2);white-space:nowrap}
+  .web-ports .wplan code{margin:0;font-size:11.5px;overflow-wrap:anywhere;min-width:0}
+  .web-ports .wplan .btn{flex:0 0 auto;white-space:nowrap}
 
   /* 首页「怎么接入」：原来是 <details>，summary 那行没有关闭入口 ——
      点开后再点同一行，手机 WebView 上不一定能回到折叠态。
@@ -355,13 +364,14 @@
           <button class="btn sm ghost" onclick="act('restart', this)">重启</button></div>
         <div class="chk"><div class="ic">⇪</div><div class="tx"><b>导出诊断</b><span>机型/ROM/守护状态/被杀记录</span></div>
           <button class="btn sm ghost" id="diagBtn" onclick="act('diag', this)">导出</button></div>
+        <div class="chk"><div class="ic">⏻</div><div class="tx"><b>彻底退出</b><span>停掉网关、额度管家、守卫与 VPN 隧道，并撤掉所有自动重启。之后不会自己再启动。</span></div>
+          <button class="btn sm ghost danger" onclick="act('quit', this)">退出</button></div>
       </div>
 
             <div class="card">
-        <h2>网页版</h2>
-        <div class="note" style="margin:0 0 9px">在电脑或平板的浏览器里打开下面的地址，可以管理网关和额度。</div>
+        <h2>面板地址</h2>
+        <div class="note" style="margin:0 0 9px">网关和额度面板也能在同一 Wi-Fi 的电脑或平板上打开。</div>
         <div id="webEntry" class="web-ports"></div>
-        <div class="note" style="margin:0">其它设备首次访问需要密钥，地址已自动带上；换设备后重新复制一次。</div>
       </div>
       <div class="card">
         <h2>关于</h2>

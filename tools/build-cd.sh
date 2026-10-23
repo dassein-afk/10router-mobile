@@ -45,9 +45,35 @@ for p in "${patches[@]}"; do
 done
 
 echo "===== 3. 自证：补丁真的进去了"
-grep -q "手机适配补丁 1.0.0" src/panel.html || { echo "❌ CSS 补丁没进去"; exit 6; }
-grep -q "原 panel-fix.js" src/panel.html || { echo "❌ 行为脚本没进去"; exit 6; }
-echo "  CSS + 行为脚本都在"
+# 正断言：纯 CSS 适配层必须在
+grep -q "手机适配 —— 纯 CSS" src/panel.html || { echo "❌ CSS 适配层没进去"; exit 6; }
+grep -q "mask-image: linear-gradient" src/panel.html || { echo "❌ 标签栏可滑提示没进去"; exit 6; }
+
+# ❗反断言（栅栏）：CD 侧绝不允许出现运行时注入脚本。
+# 历史教训：panel-fix.js 曾在 WebView 里扫 DOM 量宽度再改，扫漏一个元素就整页错乱，
+# 且永远慢一拍。适配只能写成 CSS 规则，不能靠 JS 事后动手。
+if grep -q "panelFix\|pf-tabscroll\|原 panel-fix.js" src/panel.html; then
+  echo "❌ panel.html 里出现了运行时注入脚本（panelFix / pf-tabscroll）"
+  echo "   CD 适配只允许纯 CSS。见 patches/UI-PATCHES-1.0.0.md"
+  exit 10
+fi
+# 内联脚本总量：上游 panel.html 自带 1 个业务 <script>；出现第 2 个就是又塞了适配脚本
+NSCRIPT=$(grep -c "<script" src/panel.html)
+[ "$NSCRIPT" -le 1 ] || { echo "❌ panel.html 有 $NSCRIPT 个 <script>（上游只有 1 个）—— 疑似又内联了适配脚本"; exit 11; }
+echo "  纯 CSS 适配层在；无运行时注入脚本（<script>=1）"
+
+# ── 成对断言：fetch 失败必须带 cause ──
+# 正：describeFetchError 定义在、且调用点用的是它
+grep -q "function describeFetchError" src/zcodeGateway.js \
+  || { echo "❌ describeFetchError 没进去 —— fetch 失败只会显示「fetch failed」，排障无方向"; exit 12; }
+grep -q "error: describeFetchError(e)" src/zcodeGateway.js \
+  || { echo "❌ describeFetchError 没被调用（只定义没用等于没做）"; exit 12; }
+# 反：fetchJsonRace 的 catch 里不许再只记 e.message
+if grep -q "if (clientAbort.signal.aborted) return;.*" src/zcodeGateway.js; then
+  awk '/if \\(clientAbort.signal.aborted\\) return;/{getline nxt; if (nxt ~ /error: e\\.message }/) {print "BAD"; exit 1}}' src/zcodeGateway.js \
+    && true || { echo "❌ fetchJsonRace 的 catch 仍只记 e.message（丢掉了 cause）"; exit 13; }
+fi
+echo "  fetch 错误带 cause 在；catch 不再只记「fetch failed」"
 
 echo "===== 4. 打 cd.zip"
 cd "$WORK"
@@ -75,3 +101,4 @@ for need in ("cd/bin/creditdaddy.js", "cd/src/panel.html", "cd/package.json", "c
 print("  条目 %d，关键文件齐全（含 LICENSE）" % len(n))
 PY
 echo "===== 完成"
+echo "CD-BUILD-OK"

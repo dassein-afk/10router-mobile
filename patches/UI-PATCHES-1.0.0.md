@@ -79,62 +79,84 @@ APK 是 10Router 与 CreditDaddy 的一份副本。手机环境与桌面环境�
 ## 二、CreditDaddy（`techysy/CreditDaddy`）
 
 补丁文件：`cd-patches/01-src_panel_html.patch`
-CreditDaddy 只发布 npm 包，面板是单文件 `src/panel.html`，改动直接施加在该文件上。
+CreditDaddy 只发布 npm 包，面板是单文件 `src/panel.html`，改动直接施加在该文件的 `<style>` 段上。
 
-### 1. 显示适配样式
+### 只有一处改动：`<style>` 里的手机适配规则
 
-追加到 `panel.html` 的 `<style>` 段末尾：
+**不追加任何 `<script>`。** 这是硬性约束，`tools/build-cd.sh` 会用反向断言拦截（见下）。
 
 ```css
 /* 媒体元素不超过容器 */
 img, svg, video, canvas, iframe { max-width: 100%; }
 img, video { height: auto; }
 
-/* 长字符串（密钥 / URL / 模型名）可断行，避免撑破容器 */
-code, pre, kbd, samp { overflow-wrap: anywhere; }
+/* 长字符串（密钥 / URL / 模型名）可断行 */
+code, pre, kbd, samp, .mono { overflow-wrap: anywhere; }
 
-body { max-width: 100%; }
+/* 根节点不横向撑破 */
+html, body { max-width: 100%; overflow-x: hidden; }
+
+/* 顶部标签栏：可滑 + 让"还能滑"一眼可见（不依赖 JS 加类） */
+.nav {
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  overscroll-behavior-x: contain;
+  -webkit-mask-image: linear-gradient(90deg,#000 0,#000 calc(100% - 18px),rgba(0,0,0,.45) 100%);
+          mask-image: linear-gradient(90deg,#000 0,#000 calc(100% - 18px),rgba(0,0,0,.45) 100%);
+}
+.nav::-webkit-scrollbar { height: 3px; display: block; }
+.nav::-webkit-scrollbar-thumb { background: rgba(128,128,128,.55); border-radius: 99px; }
+
+/* 结构性截断改可滚；弹性子项不被内容撑破 */
+.list, .cards, .grid, .row, table { max-width: 100%; }
+.row > *, .flex > * { min-width: 0; }
+.desc, .note, .sub, .hint, p, small { overflow-wrap: anywhere; word-break: break-word; }
 
 @media (max-width: 560px) {
-  /* 输入框字号小于 16px 时，聚焦会触发系统缩放整页 */
   input, select, textarea { font-size: max(16px, 1em); }
-  /* 全屏弹窗宽度自适应，两侧各留 3% */
-  [role="dialog"] { max-width: 94%; max-height: 88%; overflow: auto; }
+  [role="dialog"], .modal, .mask > .box { max-width: 94vw; max-height: 88vh; overflow: auto; }
 }
 
-/* 头部右侧浮层锚点从「28px 宽的齿轮按钮」上移到「整行」。
-   原样式中浮层 right:0 相对齿轮，而齿轮右侧还有九宫格按钮，
-   360px 视口下浮层 left = -26，左列内容被裁切。 */
+/* 面板设置浮层：锚点从 28px 宽的齿轮按钮上移到整行。
+   原 right:0 相对齿轮，而齿轮右侧还有九宫格按钮，360px 视口下 left=-26，左列被裁。 */
 .head-right { position: relative; }
 .head-right .head-setpop { position: static; }
 ```
 
-### 2. 布局适配脚本
+### 早年那套运行时脚本为什么全部废止
 
-追加到 `panel.html` 的 `</body>` 前，用 `<script>` 包裹。
+早期版本在 `</body>` 前插入一个 `<script>`，用 11 个 `pass*` 函数扫 DOM 量宽度再改。它被废止的理由，每一条都在真机上复现过：
 
-脚本处理窄屏下的容器级排版，**不改字号、不改控件尺寸、不改列数**：
-
-| 函数 | 作用 |
+| 旧做法 | 换成什么 |
 |---|---|
-| `passStack` | 栅格在窄屏下放不下时收成单列 |
-| `passWidth` | 元素宽于视口时约束到 100% |
-| `passWrap` | 一行放不下时允许换行 |
-| `passReveal` | 容器裁掉内容时改为可滚动 |
-| `passUnclip` | 文字被裁切时允许换行 |
-| `passScroll` | 宽表格包一层横向滚动容器 |
-| `passContrast` | 文字与背景对比度不足时调整颜色（不改字号） |
-| `passCdLoading` | 加载浮层长时间未消失时移除 |
-| `passTabHint` | 横向标签条增加可滑动提示 |
-| `passLangFlag` | 语言按钮图标与界面语言一致 |
-| `passPitch` | 竖排菜单项间距补到可点范围（不改控件本身） |
+| `passTabHint` 给标签条加类做可滑提示 | CSS 的 `mask-image` + `::-webkit-scrollbar`，不依赖类 |
+| `passUnclip` 把 `nowrap` 改成换行 | `overflow-wrap: anywhere` 写在容器上 |
+| `passReveal` 截断改可滚 | `[role=dialog],.modal{overflow:auto}` |
+| `passWidth` / `passWrap` 事后抠宽度 | `min-width:0` + `max-width:100%` |
+| `passContrast` 逐元素改色 | 删除。上游自带主题变量与 `prefers-color-scheme` |
+| `passStack` 栅格收单列 | 上游自带 `@media (max-width:560px){.list{grid-template-columns:1fr}}` |
 
-**定位原则**（改动这些函数时必须遵守）：
+废止的三条根本原因：
 
-- 只在叶子节点上做文本匹配，父容器不参与判定
-- 文案一律全等匹配，不用"包含"（包含会把子元素文本算进父容器）
-- 从命中元素扩到"整行"时，必须校验该层没有其它实质文本内容
-- 兜底只隐藏命中的那个元素，不隐藏容器
+1. **扫漏就错乱**：`document.querySelectorAll('body *')` 遍历所有层级，父容器的 `textContent` 天然包含子元素文本，命中一次就能改坏整块布局。
+2. **慢一拍**：页面已经画出来才动手，用户能看见跳变；`MutationObserver` 还会被不可见 WebView 节流。
+3. **提示靠类生效**：给标签条加类再靠类里的 `mask` 出提示——`mask` 在 WebView 里常失效，结果滑到末尾没有任何提示，看起来就是一片空白。
+
+### 构建闸门（`tools/build-cd.sh`）
+
+```bash
+# 正断言：纯 CSS 适配层必须在
+grep -q "手机适配 —— 纯 CSS" src/panel.html || exit 6
+grep -q "mask-image: linear-gradient" src/panel.html || exit 6
+
+# 反断言：绝不允许运行时注入脚本
+grep -q "panelFix\|pf-tabscroll\|原 panel-fix.js" src/panel.html && exit 10
+NSCRIPT=$(grep -c "<script" src/panel.html); [ "$NSCRIPT" -le 1 ] || exit 11
+```
+
+上游 `panel.html` 自带 1 个业务 `<script>`，出现第 2 个就是又塞了适配脚本。
+
+> 闸门查整个文件，**注释里写出 `pf-tabscroll` 这类类名也会被拦**——这是故意的，防止后来者照注释恢复旧做法。写注释用「运行时加类」，不写类名。
 
 ---
 

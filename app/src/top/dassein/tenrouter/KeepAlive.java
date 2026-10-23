@@ -29,10 +29,28 @@ public final class KeepAlive {
     static final String ACTION_PING = "top.dassein.tenrouter.PING";
     private static final int JOB_ID = 0x10A;
     private static final int PING_INTERVAL_MIN = 5;
+    /** 电池豁免机器的闹钟间隔（秒）：见 schedulePing 注释，用户核心场景要求秒级自愈 */
+    private static final int PING_EXEMPT_SEC = 15;
 
     private KeepAlive() {}
 
     /** 网关是否真的在服务（不只是进程存在） */
+    /**
+     * 端口上是否已经有人在监听（用于区分「起不来」和「已经有一个实例在跑」）。
+     * 只做一次本机 TCP connect，不发送任何数据，200ms 超时。
+     */
+    public static boolean portInUse(int port) {
+        java.net.Socket s = new java.net.Socket();
+        try {
+            s.connect(new java.net.InetSocketAddress("127.0.0.1", port), 200);
+            return true;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            try { s.close(); } catch (Exception ignored) {}
+        }
+    }
+
     public static boolean isUp() {
         try {
             HttpURLConnection c = (HttpURLConnection) new URL(
@@ -57,14 +75,21 @@ public final class KeepAlive {
             return;
         }
         lastEnsureAt = now;
-        if (isUp()) return;
-        try {
-            Intent svc = new Intent(ctx, GatewayService.class);
-            if (android.os.Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(svc);
-            else ctx.startService(svc);
-        } catch (Exception e) {
-            logLine(ctx, "[keepalive] startService 失败: " + e);
+        // ❗别在这里 return：原来 `if (isUp()) return;` 把下面的 GuardLink.ensureGuard()
+        // 一起短路了——网关一健康，守卫进程就永远拉不起来。而守卫进程恰恰是被清后
+        // 几秒内拉回的唯一手段，结果等于守卫只在"已经坏了"的时候才存在，形同虚设。
+        if (!isUp()) {
+            try {
+                Intent svc = new Intent(ctx, GatewayService.class);
+                if (android.os.Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(svc);
+                else ctx.startService(svc);
+            } catch (Exception e) {
+                logLine(ctx, "[keepalive] startService 失败: " + e);
+            }
         }
+        // 每次"确认网关该在跑"的时刻都确保守卫进程在（幂等，conn 已存在就直接返回）。
+        // 放在节流之后，避免高频心跳反复 bindService。
+        GuardLink.ensureGuard(ctx);
     }
 
     private static volatile long lastEnsureAt = 0;
@@ -88,6 +113,12 @@ public final class KeepAlive {
      * 静默吞掉——实测进程被冻结 75 分钟期间，1 分钟一次的精确闹钟一次都没响过。
      * 唯一在激进省电 + 后台冻结下仍准时投递的是 setAlarmClock（系统"闹钟"类）。
      * 代价：状态栏出现闹钟图标；换来的是冻结期间也能被唤醒。
+     *
+     * ❗ 间隔为什么从 1 分钟改成 15 秒：
+     *   用户的核心场景是"我在别的 App 里调本机网关"。撞上一次 1 分钟的空档，对话就断一次。
+     *   已获电池豁免时 Doze 本来就不限制我们，15 秒是允许的；未豁免时仍走 5 分钟
+     *   （系统会对短周期精确闹钟做限流，设了也会被拉长，所以干脆按档位给）。
+     *   真正"几秒级"的那条保活是 GuardService（独立进程 3 秒探活），闹钟是它的兜底。
      */
     public static void schedulePing(Context ctx) {
         try {
@@ -95,15 +126,15 @@ public final class KeepAlive {
             if (am == null) return;
             PendingIntent pi = pingIntent(ctx);
             boolean exempt = isIgnoringBattery(ctx);
-            long delay = (exempt ? 1 : PING_INTERVAL_MIN) * 60_000L;
+            long delay = (exempt ? PING_EXEMPT_SEC : PING_INTERVAL_MIN * 60L) * 1000L;
             if (android.os.Build.VERSION.SDK_INT >= 21 && (exempt || isAggressiveRom())) {
                 am.setAlarmClock(new AlarmManager.AlarmClockInfo(
                         System.currentTimeMillis() + delay, showIntent(ctx)), pi);
-                lastAlarmMode = "AlarmClock(1min)";
+                lastAlarmMode = "AlarmClock(" + (delay / 1000) + "s)";
             } else if (exempt && android.os.Build.VERSION.SDK_INT >= 23) {
                 am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP,
                         SystemClock.elapsedRealtime() + delay, pi);
-                lastAlarmMode = "ExactAndAllowWhileIdle(" + (delay / 60000) + "min)";
+                lastAlarmMode = "ExactAndAllowWhileIdle(" + (delay / 1000) + "s)";
             } else {
                 am.setInexactRepeating(AlarmManager.ELAPSED_REALTIME_WAKEUP,
                         SystemClock.elapsedRealtime() + delay, delay, pi);
@@ -296,20 +327,30 @@ public final class KeepAlive {
         } catch (Exception ignored) {}
     }
 
-    // ===================== 守候锚点互切（VPN 锚 ⇄ 音频锚） =====================
+    // ===================== 守候锚点：VPN 锚与第三方 VPN 互斥让位 =====================
     // 痛点：用户的 VPN 通道要留给梯子/Tailscale/WG，第 4 档 VPN 锚抢槽就不可用。
     // 方案：两档锚点由一个协调器按通道占用情况互切——VPN 空闲用 VPN 锚（最硬），
-    // 被占用立刻退到音频锚（第 3.5 档，不占通道），外部 VPN 撤了再切回。
+    // 被占用立刻让位（不抢通道），外部 VPN 撤了再切回。
 
-    /** 守候模式：auto=VPN 优先自动让位 | vpn=强制 VPN 锚 | audio=只用音频锚 | off=关。
-     *  升级迁移：没有 anchor_mode 文件时按老 vpn_wanted 判定 auto/off，老用户行为不变。 */
+    /**
+     * 守候模式：auto=通道空闲时用 VPN 锚、被占用时自动让位 | vpn=强制 VPN 锚 | off=关。
+     *
+     * 音频锚（第 3.5 档）已删除：Android 14+ 上它的 startForeground 缺类型声明会抛异常并被吞掉，
+     * 实际从未进入前台；且国产 ROM 的冻结判据是白名单与自启动授权，不看进程里有没有音频流。
+     * 留着只会让用户以为"开着锚"，比没有更糟。替代它的是系统绑定锚（通知使用权）+ 自启动引导。
+     *
+     * 升级迁移：没有 anchor_mode 文件时按老 vpn_wanted 判定 auto/off；老值 "audio" 一律读成 auto，
+     * 免得用户卡在一个已经不存在的档位上。
+     */
     public static String anchorMode(Context ctx) {
         String m = readFile1(new java.io.File(ctx.getFilesDir(), "anchor_mode")).trim();
-        if (m.equals("auto") || m.equals("vpn") || m.equals("audio") || m.equals("off")) return m;
+        if (m.equals("audio")) return "auto";   // 已删除的档位，静默迁移
+        if (m.equals("auto") || m.equals("vpn") || m.equals("off")) return m;
         return vpnWanted(ctx) ? "auto" : "off";
     }
 
     public static void setAnchorMode(Context ctx, String m) {
+        if (m.equals("audio")) m = "auto";
         setVpnWanted(ctx, m.equals("auto") || m.equals("vpn"));
         try {
             java.io.FileWriter w = new java.io.FileWriter(
@@ -317,21 +358,73 @@ public final class KeepAlive {
             w.write(m); w.close();
         } catch (Exception ignored) {}
         logLine(ctx, "[anchor] 守候模式 → " + m);
+        // ❗必须立刻生效，不能等 20 秒轮询：
+        //   用户点「关」的时候期待的是"马上掉"，等一轮轮询回来再拆，观感就是"按钮没用"。
+        //   force=true 跳过 20 秒节流，并在 off 分支里真的 stopService。
+        try { evaluateAnchor(ctx, true); } catch (Throwable ignored) {}
     }
 
-    /** 有没有第三方 VPN 在占通道（梯子/Tailscale/wg）；我们自己的守候隧道不算。 */
+    /**
+     * 有没有第三方 VPN 在占通道（梯子/Tailscale/wg）；我们自己的守候隧道不算。
+     *
+     * ❗旧实现第一行是 `if (VpnKeepAliveService.active) return false;` —— 只要我们自己的隧道开着
+     * 就永远说"没有外部 VPN"，于是再也发现不了用户的梯子顶掉了我们，转头又去抢回来，
+     * 两边来回顶 = 用户说的"它们会被同时使用"。必须先看网络、再判归属。
+     */
     public static boolean externalVpn(Context ctx) {
-        if (VpnKeepAliveService.active) return false;
+        int count = 0;
+        boolean anyVpn = false;
         try {
             ConnectivityManager cm = (ConnectivityManager)
                     ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
             if (cm == null) return false;
             for (Network n : cm.getAllNetworks()) {
                 NetworkCapabilities c = cm.getNetworkCapabilities(n);
-                if (c != null && c.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return true;
+                if (c != null && c.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                    anyVpn = true;
+                    count++;
+                }
             }
-        } catch (Throwable ignored) {}
-        return false;
+        } catch (Throwable ignored) { return false; }
+        if (!anyVpn) return false;
+        // 我们自己的隧道也算一条；多于一条就说明外面确实还有别人的 VPN
+        return count > (VpnKeepAliveService.active ? 1 : 0);
+    }
+
+    /**
+     * 诊断用：把每一条 VPN 网络的「归属谁」原样列出来。
+     *
+     * ❗加这个是因为实测出现「外部 VPN 占通道=是」但用户根本没开梯子，
+     * 而 externalVpn() 只看条数 —— 条数对不上时我们无法从诊断里判断到底是
+     * ①华为自己的某个网络被标成了 VPN ②还是我们自己的隧道被算了两次。
+     * 与其猜，不如把这行贴出来看。
+     */
+    public static String vpnNetworksDump(Context ctx) {
+        StringBuilder sb = new StringBuilder();
+        try {
+            ConnectivityManager cm = (ConnectivityManager)
+                    ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return "无法读取（ConnectivityManager=null）";
+            int n = 0;
+            for (Network net : cm.getAllNetworks()) {
+                NetworkCapabilities c = cm.getNetworkCapabilities(net);
+                if (c == null || !c.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue;
+                n++;
+                int uid = c.getOwnerUid();
+                String owner = "未知";
+                try {
+                    if (uid >= 0) {
+                        String[] pkgs = ctx.getPackageManager().getPackagesForUid(uid);
+                        owner = pkgs != null && pkgs.length > 0 ? pkgs[0] : ("uid=" + uid);
+                    }
+                } catch (Throwable ignored) {}
+                boolean ours = owner.equals(ctx.getPackageName());
+                sb.append("\n   · ").append(ours ? "本应用隧道" : "其他 App：" + owner)
+                  .append("（uid=").append(uid).append("）");
+            }
+            if (n == 0) sb.append("\n   · 没有任何 VPN 网络");
+        } catch (Throwable t) { sb.append(" 读取失败：").append(t); }
+        return sb.toString();
     }
 
     private static volatile boolean lastExt = false;
@@ -352,46 +445,85 @@ public final class KeepAlive {
         lastExt = ext;
 
         if (m.equals("off")) {
-            stopVpnAnchor(ctx); stopAudioAnchor(ctx);
-            writeAnchorState(ctx, "off", "");
+            stopVpnAnchor(ctx);
+            writeAnchorState(ctx, "off", "用户已关（只靠系统绑定锚 + 闹钟）");
             return;
         }
-        String want = m.equals("auto") ? (ext ? "audio" : "vpn") : m;
-        String why = m.equals("auto") ? (ext ? "外部 VPN 占通道，自动让位" : "VPN 通道空闲") : "手动指定";
+        String want = m.equals("auto") ? (ext ? "none" : "vpn") : m;
+        String why = m.equals("auto")
+                ? (ext ? externalVpnName(ctx) + " 正占用 VPN 通道，已让位（双 VPN 会互相顶掉）" : "VPN 通道空闲")
+                : "手动指定";
 
         if (want.equals("vpn")) {
             // 自动回切要等外部 VPN 确实走掉 90 秒（它的重连抖动期间不抢回来）
-            if (m.equals("auto") && extClearedAt != 0 && now - extClearedAt < 90_000
-                    && AudioAnchorService.active) {
-                startAudioAnchor(ctx);   // 先留在音频锚上，别裸奔
-                writeAnchorState(ctx, "audio", "外部 VPN 刚断开，90 秒后自动切回 VPN 锚");
+            if (m.equals("auto") && extClearedAt != 0 && now - extClearedAt < 90_000) {
+                writeAnchorState(ctx, "wait", "外部 VPN 刚断开，90 秒后切回 VPN 锚（期间不抢通道）");
                 return;
             }
             extClearedAt = 0;
-            stopAudioAnchor(ctx);
             if (!VpnKeepAliveService.active) {
+                // ❗冷静期：刚被撤销 90 秒内不重建，避免与用户的梯子拉锯
+                if (vpnRevokedAt != 0 && now - vpnRevokedAt < 90_000) {
+                    writeAnchorState(ctx, "wait", "隧道刚被撤销（" + (vpnRevokedByOther ? "其他 VPN 顶掉" : "系统关闭")
+                            + "），90 秒内不重建，避免双 VPN 互相顶");
+                    return;
+                }
+                // ❗占用通道前先看有没有别人的 VPN，有就绝不建立 —— 双 VPN 同时存在会互相踢下线
+                if (externalVpn(ctx)) {
+                    writeAnchorState(ctx, "wait", externalVpnName(ctx) + " 在用，不抢通道");
+                    return;
+                }
                 try {
                     if (android.net.VpnService.prepare(ctx) == null) {
                         startVpnAnchor(ctx);
+                        vpnRevokedAt = 0;
+                        writeAnchorState(ctx, "vpn", why);
                     } else {
-                        // 还没授权：先用音频锚兜着，绝不把用户晾着等弹窗
-                        startAudioAnchor(ctx);
-                        writeAnchorState(ctx, "audio", "VPN 未授权，暂用音频锚（授权后可切回）");
-                        return;
+                        // 还没授权：不自动弹窗（后台弹窗会被系统拒），等用户自己来点
+                        writeAnchorState(ctx, "wait", "VPN 锚未授权：需要时在设置里点一下授权");
                     }
                 } catch (Throwable t) {
-                    startAudioAnchor(ctx);
-                    writeAnchorState(ctx, "audio", "VPN 建立异常：" + t + "，暂用音频锚");
-                    return;
+                    writeAnchorState(ctx, "wait", "VPN 锚建立异常：" + t + "（靠系统绑定锚兜着）");
                 }
+                return;
             }
             writeAnchorState(ctx, "vpn", why);
         } else {
+            // 让位：把我们的隧道撤掉，把 VPN 槽还给用户的梯子
             if (VpnKeepAliveService.active) stopVpnAnchor(ctx);
-            startAudioAnchor(ctx);
-            writeAnchorState(ctx, "audio", why);
+            writeAnchorState(ctx, "none", why);
         }
     }
+
+    /** 外部 VPN 的可读名字（诊断/界面用）；拿不到就返回"其他 VPN"。 */
+    public static String externalVpnName(Context ctx) {
+        try {
+            ConnectivityManager cm = (ConnectivityManager)
+                    ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return "其他 VPN";
+            for (Network n : cm.getAllNetworks()) {
+                NetworkCapabilities c = cm.getNetworkCapabilities(n);
+                if (c == null || !c.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue;
+                String name = c.getOwnerUid() >= 0
+                        ? ctx.getPackageManager().getNameForUid(c.getOwnerUid()) : null;
+                if (name != null && !name.equals(ctx.getPackageName())) return name;
+            }
+        } catch (Throwable ignored) {}
+        return "其他 VPN";
+    }
+
+    /**
+     * 记录一次"守候隧道被系统撤销"。被别的 VPN 顶掉时，冷静期内不再抢通道，
+     * 否则两边会形成"我建你顶、你顶我建"的拉锯 —— 用户看到的就是两条 VPN 同时在用。
+     */
+    public static void noteVpnRevoked(Context ctx, boolean byOtherVpn) {
+        vpnRevokedAt = System.currentTimeMillis();
+        vpnRevokedByOther = byOtherVpn;
+        logLine(ctx, "[anchor] 隧道被撤销（第三方 VPN 顶掉=" + byOtherVpn + "），进入 90 秒冷静期");
+    }
+
+    private static volatile long vpnRevokedAt = 0;
+    private static volatile boolean vpnRevokedByOther = false;
 
     /** 当前锚点状态一行（"mode|原因"），供首页 chip / 诊断显示，别猜。 */
     public static String anchorState(Context ctx) {
@@ -410,6 +542,21 @@ public final class KeepAlive {
         } catch (Exception ignored) {}
     }
 
+    /**
+     * 用户到底要不要 VPN 锚。服务被系统重建时必须先问这一句。
+     *
+     * 为什么不能只看静态变量 active：进程被清后 active 归零，START_STICKY 把服务拉回来时
+     * 它并不知道用户已经把模式选成了「关」——于是老老实实又建一条隧道。
+     * 用户看到的正是「我点了关，它又自己开了」。模式存在文件里，跨进程死亡也有效。
+     */
+    public static boolean anchorWanted(Context ctx) {
+        String m = anchorMode(ctx);
+        if ("off".equals(m)) return false;
+        if ("vpn".equals(m)) return true;
+        // auto：只有通道空闲时才用 VPN 锚（有别人的梯子就让位）
+        return !externalVpn(ctx);
+    }
+
     private static void startVpnAnchor(Context ctx) {
         if (VpnKeepAliveService.active) return;
         try {
@@ -420,32 +567,25 @@ public final class KeepAlive {
     }
 
     private static void stopVpnAnchor(Context ctx) {
-        if (!VpnKeepAliveService.active) return;
+        // ❗不能再用 startService(ACTION_STOP)：服务没在跑时，Android 会先把服务
+        //   create 起来、走一遍正常 onStartCommand → startTun() 真的把隧道建立出来，
+        //   然后才收到 STOP。用户点了"关"，结果是先建再拆，中间还可能是 START_STICKY
+        //   把它再拉一轮 —— 表现就是「VPN 点关了照样不掉」。
+        // stopService 直接停，onDestroy 里 closeTun()，全程不碰 establish()。
         try {
             Intent i = new Intent(ctx, VpnKeepAliveService.class);
-            i.setAction(VpnKeepAliveService.ACTION_STOP);
-            ctx.startService(i);
-            logLine(ctx, "[anchor] 让出 VPN 通道（停守候隧道）");
-        } catch (Throwable ignored) {}
-    }
-
-    private static void startAudioAnchor(Context ctx) {
-        if (AudioAnchorService.active) return;
-        try {
-            Intent i = new Intent(ctx, AudioAnchorService.class);
-            if (android.os.Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(i);
-            else ctx.startService(i);
-        } catch (Throwable t) { logLine(ctx, "[anchor] 启动音频锚失败: " + t); }
-    }
-
-    private static void stopAudioAnchor(Context ctx) {
-        if (!AudioAnchorService.active) return;
-        try {
-            Intent i = new Intent(ctx, AudioAnchorService.class);
-            i.setAction(AudioAnchorService.ACTION_STOP);
-            ctx.startService(i);
-            logLine(ctx, "[anchor] 释放音频锚（VPN 锚接管）");
-        } catch (Throwable ignored) {}
+            ctx.stopService(i);
+        } catch (Throwable t) {
+            logLine(ctx, "[anchor] 关闭 VPN 锚失败: " + t);
+        }
+        // 兜底：即便服务没能停（比如被系统持着），也要立刻关 tun，别让通道继续挂着
+        boolean wasActive = VpnKeepAliveService.active;
+        VpnKeepAliveService.forceCloseTun();
+        // ❗只在**真的动了什么**的时候记一行。
+        //   原来无条件 log，而 evaluateAnchor 每 20 秒被网关/闹钟调一次，
+        //   于是 GatewayService 的 onStartCommand → evaluateAnchor → stopVpnAnchor 形成
+        //   每 15~20 秒一行的噪音，把真正有用的日志全埋了（实测 gateway.log 里一半是这句）。
+        if (wasActive) logLine(ctx, "[anchor] 守候通道已关闭（原为开启）");
     }
 
     private static String readFile1(java.io.File f) {
@@ -521,6 +661,39 @@ public final class KeepAlive {
         }
     }
 
+    // ---------- 无障碍锚点（可选第四档） ----------
+
+    /**
+     * 用户是否已在系统「无障碍」里开本 App 的锚点。
+     *
+     * 判据只能用 Settings.Secure 里那条扁平串（与通知使用权同一套路），
+     * 没有任何 API 能"查询某个 AccessibilityService 是否已启用"——别去找，没有。
+     * 系统串格式：pkg/cls:pkg/cls（可能带 userId/ 前缀）。
+     */
+    public static boolean a11yEnabled(Context ctx) {
+        try {
+            String flat = android.provider.Settings.Secure.getString(
+                    ctx.getContentResolver(), "enabled_accessibility_services");
+            if (flat == null) return false;
+            return flat.contains(ctx.getPackageName() + "/");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 跳「无障碍」设置页。❗ 这个页面不能直达某个 App 项，系统只提供总列表。 */
+    public static void openA11ySettings(Context ctx) {
+        try {
+            android.content.Intent i = new android.content.Intent(
+                    android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS);
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            ctx.startActivity(i);
+        } catch (Exception e) {
+            openAppDetail(ctx);
+        }
+    }
+
+
     private static void openAppDetail(Context ctx) {
         try {
             android.content.Intent i = new android.content.Intent(
@@ -569,8 +742,16 @@ public final class KeepAlive {
         sb.append("上次心跳: ").append(age < 0 ? "无记录" : (age + " 秒前")).append('\n');
         sb.append("电池优化豁免: ").append(isIgnoringBattery(ctx) ? "已豁免" : "未豁免 ← 头号被杀原因").append('\n');
         sb.append("系统绑定锚点: ").append(anchorEnabled(ctx) ? "已开启（系统持有连接）" : "未开启 ← 息屏后被清的主因").append('\n');
-        sb.append("进程启动次数: ").append(bootCountOf(ctx)).append("（>1 = 被系统杀过，靠 START_STICKY 拉回）\n");
+        sb.append("无障碍锚点: ").append(a11yEnabled(ctx)
+                ? "已开启（系统级绑定，不占 VPN 通道，不读屏幕）"
+                : "未开启（可选第四档；开了能和 VPN 锚拿同等待遇）").append('\n');
+        sb.append("进程启动次数: ").append(bootCountOf(ctx))
+          .append("（>1 = 主进程被系统清掉过；被清后由 START_STICKY / 闹钟 / 守卫进程拉回）\n");
         long[] fz = freezeStats(ctx);
+        // 口径必须写清楚，否则数字会被误读：这个计数是看门狗「一觉睡超 60 秒」的次数。
+        //   睡超 60 秒 = 这段时间 CPU 没给我们，也就是被冻结 —— 但同一个冻结窗口里，
+        //   看门狗的多次未完成睡眠会各记一次；所以它是「冻结窗口数」的上界，不是精确值。
+        //   它只回答一个问题：这台机器上「冻结」到底有多频繁。不必去优化这个数字本身。
         sb.append("被冻结次数: ").append(fz[0]);
         if (fz[0] > 0) {
             sb.append("，最长一次 ").append(fz[1] / 60).append(" 分钟");
@@ -579,18 +760,17 @@ public final class KeepAlive {
                 sb.append("，最近一次 ").append(minAgo).append(" 分钟前");
             }
         }
-        sb.append(fz[0] == 0 ? "（未发生）" : "").append('\n');
+        sb.append(fz[0] == 0 ? "（未发生）" : "（按看门狗睡超 60s 计；同一窗口可能计多次，看趋势不看绝对值）").append('\n');
         sb.append("闹钟类型: ").append(lastAlarmMode)
           .append(isAggressiveRom() ? "（已按华为/鸿蒙规则用 AlarmClock）" : "").append('\n');
         sb.append("守候模式: ").append(anchorMode(ctx)).append('\n');
         sb.append("保活锁: CPU=").append(GatewayService.cpuLockHeld ? "持有（不睡）" : "无（服务没跑？）")
           .append(" · 无线电=").append(GatewayService.wifiLockHeld ? "全速（息屏不降载）" : "省电 ← 息屏后别的设备连不上的常见真凶").append('\n');
         sb.append("服务器常亮: ").append(keepScreenOn(ctx) ? "开（仅前台/插电时；非保活手段，锁屏即失效）" : "关").append('\n');
-        sb.append("当前锚点: ").append(VpnKeepAliveService.active ? "VPN（第 4 档，占 VPN 通道）"
-                : AudioAnchorService.active ? "音频（第 3.5 档，不占通道，听不见）"
-                : "无 ← 只剩通知锚/闹钟，弱").append('\n');
+        sb.append("当前锚点: ").append(VpnKeepAliveService.active ? "VPN（占一条 VPN 通道）" : "无 ← 靠系统绑定锚 + AlarmClock + JobScheduler 兜着").append('\n');
         sb.append("锚点原因: ").append(anchorState(ctx).replace('|', ' ')).append('\n');
-        sb.append("外部 VPN 占通道: ").append(externalVpn(ctx) ? "是（梯子/Tailscale/WG 在用，VPN 锚已自动让位）" : "否").append('\n');
+        sb.append("外部 VPN 占通道: ").append(externalVpn(ctx) ? "是（" + externalVpnName(ctx) + " 在用，VPN 锚已让位）" : "否").append('\n');
+        sb.append("VPN 网络明细:").append(vpnNetworksDump(ctx)).append('\n');
         sb.append("通知权限: ").append(notifEnabled(ctx) ? "已允许" : "未允许 ← 前台服务通知不可见会被快速回收").append('\n');
         sb.append("省电模式: ").append(powerSave(ctx) ? "开启中 ← 更容易被冻结" : "关闭").append('\n');
         boolean up = isUp();
@@ -633,19 +813,47 @@ public final class KeepAlive {
         }
     }
 
-    /** 国产 ROM 的自启动/后台管理页，能直接跳就跳，跳不过去退回应用详情 */
-    public static void openAutostartSettings(Context ctx) {
+    /**
+     * 国产 ROM 的自启动/后台管理页，能直接跳就跳，跳不过去退回应用详情。
+     *
+     * 这是"不占 VPN 通道"的保活里最关键的一环：电池优化豁免只管 AOSP 那套，
+     * 华为/小米/OPPO/vivo 各有自己一套且**默认全关**；系统绑定锚只能拿到 binder 连接，
+     * 管不了开机自启和后台清理白名单。
+     *
+     * 各家 Activity 名字经常改、还常被删，所以逐个试、失败退到应用详情页，
+     * 并把「手动怎么走」返回给界面 —— 不让用户点了一个没反应的按钮就没下文。
+     *
+     * @return 该机型的手动操作路径（界面直接展示）
+     */
+    public static String openAutostartSettings(Context ctx) {
+        // ❗顺序即优先级，第一行必须是「这台机器上真的存在的那个」。
+        //
+        // 华为 ANA-AN00（HarmonyOS 4.2 / EMUI 12）实测：resolveActivity 对
+        // com.huawei.systemmanager.startupmgr.* 三处都返回非 null，但点进去是**空列表**——
+        // 自启动授权其实住在「设置 → 电池 → 启动管理」，由 com.hihonor.systemmanager
+        // 或 com.huawei.systemmanager 的 .startupmgr.ui.StartupNormalAppListActivity 承载，
+        // 而「应用管理」里根本没有这一项。这就是用户说的"跳到应用管理里找不到自启动"。
+        // 所以华为系先试「启动管理」，再试其余。
+        String mf = (android.os.Build.MANUFACTURER + " " + android.os.Build.BRAND).toLowerCase();
+        boolean hw = mf.contains("huawei") || mf.contains("honor") || mf.contains("harmony");
         String[][] targets = {
-                {"com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"},
+                // 华为 / 荣耀：启动管理（真入口）
                 {"com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"},
-                {"com.huawei.systemmanager", "com.huawei.systemmanager.appcontrol.activity.StartupAppControlActivity"},
-                {"com.huawei.systemmanager", "com.huawei.systemmanager.optimize.process.ProtectActivity"},
+                {"com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupAppListActivity"},
                 {"com.hihonor.systemmanager", "com.hihonor.systemmanager.startupmgr.ui.StartupNormalAppListActivity"},
                 {"com.honor.systemmanager", "com.honor.systemmanager.startupmgr.ui.StartupNormalAppListActivity"},
+                {"com.huawei.systemmanager", "com.huawei.systemmanager.appcontrol.activity.StartupAppControlActivity"},
+                {"com.huawei.systemmanager", "com.huawei.systemmanager.optimize.process.ProtectActivity"},
+                // 小米 / 红米
+                {"com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"},
+                // OPPO / 一加 / realme
                 {"com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"},
+                {"com.oplus.safecenter", "com.oplus.safecenter.permission.startup.StartupAppListActivity"},
                 {"com.oppo.safe", "com.oppo.safe.permission.startup.StartupAppListActivity"},
+                // vivo / iQOO
                 {"com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"},
                 {"com.iqoo.secure", "com.iqoo.secure.ui.phoneoptimize.BgStartUpManager"},
+                // 魅族 / 三星 / 乐视
                 {"com.meizu.safe", "com.meizu.safe.permission.SmartBGActivity"},
                 {"com.samsung.android.lool", "com.samsung.android.sm.ui.battery.BatteryActivity"},
                 {"com.letv.android.letvsafe", "com.letv.android.letvsafe.AutobootManageActivity"},
@@ -655,17 +863,63 @@ public final class KeepAlive {
                 android.content.Intent i = new android.content.Intent();
                 i.setComponent(new android.content.ComponentName(t[0], t[1]));
                 i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                // ❗必须先 resolveActivity 再 startActivity。
+                // 原来只靠 try/catch：Activity 不存在时很多 ROM 会**静默失败**，
+                // 于是循环里第一个 target 无论能不能用都会被执行一次，日志还写着"已打开"——
+                // 用户看到的就是"跳到了一个不相干的页面"。
+                if (ctx.getPackageManager().resolveActivity(i, 0) == null) continue;
                 ctx.startActivity(i);
-                return;
-            } catch (Exception ignored) {}
+                logLine(ctx, "[anchor] 已打开自启动授权页: " + t[0] + "/" + t[1]);
+                if (hw) {
+                    logLine(ctx, "[anchor] 华为/荣耀：若这一页是「应用启动管理」列表，把 10Router 的"
+                            + "「自动管理」关掉，三个开关（自启动/关联启动/后台活动）全开");
+                }
+                return manualPath();
+            } catch (Exception ignored) { /* 这家没这个 Activity，试下一个 */ }
         }
+        // 兜底 1：部分 ROM 只把入口挂在「电池」页下（华为的设置→电池→启动管理就是这种）
+        try {
+            android.content.Intent i = new android.content.Intent(
+                    android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (ctx.getPackageManager().resolveActivity(i, 0) != null) {
+                ctx.startActivity(i);
+                logLine(ctx, "[anchor] 没有自启动直链，已打开电池优化列表；手动路径: " + manualPath());
+                return manualPath();
+            }
+        } catch (Exception ignored) {}
+        // 兜底 2：应用详情页。虽然要多点两下，但它在**所有** ROM 上都存在、且一定和本应用相关，
+        // 比"跳到某个不相干的系统页"强得多——用户至少知道自己站在哪、该找什么。
         try {
             android.content.Intent i = new android.content.Intent(
                     android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                     android.net.Uri.parse("package:" + ctx.getPackageName()));
             i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
             ctx.startActivity(i);
+            logLine(ctx, "[anchor] 没有可用的自启动直链，已打开本应用详情页；手动路径: " + manualPath());
         } catch (Exception ignored) {}
+        return manualPath();
+    }
+
+    /** 按本机厂商给出自启动的手动操作路径（跳转失败时这是唯一出路）。 */
+    public static String manualPath() {
+        String mf = (android.os.Build.MANUFACTURER + " " + android.os.Build.BRAND).toLowerCase();
+        if (mf.contains("huawei") || mf.contains("honor") || mf.contains("harmony"))
+            // ❗实测（ANA-AN00 / HarmonyOS 4.2）：自启动**不在**「应用管理」里，
+            //    那里面翻遍了也没有"自启动"这一项。真入口在「设置 → 电池 → 启动管理」，
+            //    或者负一屏/桌面下拉搜「应用启动管理」直接进。两条路都写出来，
+            //    因为不同 EMUI/HarmonyOS 小版本入口位置不一样，只写一条会把人带错。
+            return "设置 → 电池 → 启动管理 → 10Router → 关掉「自动管理」，"
+                 + "自启动/关联启动/后台活动 三个开关全开（部分机型在「手机管家 → 应用启动管理」）";
+        if (mf.contains("xiaomi") || mf.contains("redmi") || mf.contains("poco"))
+            return "设置 → 应用设置 → 应用管理 → 10Router → 自启动打开；省电策略选「无限制」；最近任务里下拉卡片加锁";
+        if (mf.contains("oppo") || mf.contains("realme") || mf.contains("oneplus"))
+            return "设置 → 电池 → 应用耗电管理 → 10Router → 允许后台运行、自启动、关联启动";
+        if (mf.contains("vivo") || mf.contains("iqoo"))
+            return "i管家 → 应用管理 → 权限管理 → 自启动 → 10Router 打开；后台高耗电选「允许」";
+        if (mf.contains("samsung"))
+            return "设置 → 电池 → 后台使用限制 → 把 10Router 加进「从不休眠的应用」";
+        return "设置 → 应用 → 10Router → 电池 → 选「不受限制」";
     }
 
     private static PendingIntent pingIntent(Context ctx) {
@@ -782,6 +1036,103 @@ public final class KeepAlive {
             w.write(ts + " " + line + "\n");
             w.close();
         } catch (Exception ignored) {}
+    }
+
+    // ===================== 彻底退出 =====================
+    /**
+     * 把这个 App 的全部后台活动停掉，并且**让系统别再自动拉起**。
+     *
+     * 为什么需要它：这个 App 天生要"赖着不走"——前台服务 + START_STICKY + AlarmClock(15s)
+     * + JobScheduler + 独立守卫进程 + 可选 VPN。任何一项单独关掉，其它几项都会把它拉回来。
+     * 所以"关掉 VPN 就好"这种思路不成立，必须有一个**一次拆干净**的入口。
+     *
+     * 关掉的顺序是有讲究的（写错了会自己把自己拉回来）：
+     *   1. 先落一个「用户要求停止」的标记 —— 之后所有自愈路径看到它就闭嘴。
+     *      没有这一步，停服务 -> START_STICKY 拉起 -> 又活，用户会以为按钮没用。
+     *   2. 撤掉闹钟与 Job —— 它们会在几秒到 15 分钟内把一切都重建。
+     *   3. 停 VPN 隧道（先关 tun，用户状态栏里的钥匙图标立刻消失）。
+     *   4. 停守卫进程、停网关服务（onDestroy 会结束 node 与额度管家两个子进程）。
+     *   5. 最后清孤儿：万一上个进程被系统杀掉、node 的父进程变成 1，它不会被 4 带走。
+     */
+    public static void shutdownAll(Context ctx) {
+        logLine(ctx, "[quit] 用户要求彻底退出 → 开始拆除");
+
+        // 1. 意志标记：先立规矩，再动手
+        setFlag(ctx, "user_stopped", true);
+
+        // 2. 闹钟 + Job（这两个是"复活"的主力）
+        try {
+            AlarmManager am = (AlarmManager) ctx.getSystemService(Context.ALARM_SERVICE);
+            if (am != null) am.cancel(pingIntent(ctx));
+            logLine(ctx, "[quit] 心跳闹钟已撤");
+        } catch (Throwable t) { logLine(ctx, "[quit] 撤闹钟失败: " + t); }
+        try {
+            JobScheduler js = (JobScheduler) ctx.getSystemService(Context.JOB_SCHEDULER_SERVICE);
+            if (js != null) js.cancel(JOB_ID);
+            logLine(ctx, "[quit] 看门狗 Job 已撤");
+        } catch (Throwable t) { logLine(ctx, "[quit] 撤 Job 失败: " + t); }
+
+        // 3. VPN 隧道：先关 tun（状态栏钥匙立刻消失），再停服务
+        VpnKeepAliveService.forceCloseTun();
+        try { ctx.stopService(new Intent(ctx, VpnKeepAliveService.class)); } catch (Throwable ignored) {}
+
+        // 4. 守卫进程 + 网关服务
+        try { ctx.stopService(new Intent(ctx, GuardService.class)); } catch (Throwable ignored) {}
+        try { ctx.stopService(new Intent(ctx, GatewayService.class)); } catch (Throwable ignored) {}
+        try { ctx.stopService(new Intent(ctx, TouchBlockService.class)); } catch (Throwable ignored) {}
+
+        // 5. 清孤儿 node（父进程已死时，停服务不会带走它）
+        killStrayProcesses(ctx);
+
+        logLine(ctx, "[quit] 拆除完成（要恢复请回 App 或重启手机）");
+    }
+
+    /**
+     * 杀掉残留的 node / cloudflared 子进程。
+     *
+     * 为什么必须单独做：Android 上 stopService 只结束 Java 服务，ProcessBuilder 起的
+     * 子进程如果父进程已经不是我们（App 曾被系统杀过、node 变成了 init 的孤儿），
+     * 它会继续占着 20128/47860，用户回到 App 也起不来新实例。
+     * 这里用 `ps -A -o PID,PPID,NAME` 找 node，只杀「父进程不是我们」的那些。
+     */
+    private static void killStrayProcesses(Context ctx) {
+        int myPid = android.os.Process.myPid();
+        try {
+            java.lang.Process ps = new ProcessBuilder("/system/bin/sh", "-c",
+                    "ps -A -o PID,PPID,NAME 2>/dev/null || ps -A 2>/dev/null").start();
+            java.io.BufferedReader r = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(ps.getInputStream()));
+            String line;
+            int killed = 0;
+            while ((line = r.readLine()) != null) {
+                String[] f = line.trim().split("\\s+");
+                if (f.length < 3) continue;
+                String name = f[f.length - 1];
+                // 只认我们自己的二进制名，别误杀系统里别的 node（虽然安卓上基本没有）
+                boolean ours = name.equals("node") || name.equals("creditdaddy.js")
+                        || name.startsWith("cloudflared");
+                if (!ours) continue;
+                int pid, ppid;
+                try { pid = Integer.parseInt(f[0]); ppid = Integer.parseInt(f[1]); } catch (Exception e) { continue; }
+                if (pid <= 1 || pid == myPid) continue;
+                try { android.os.Process.killProcess(pid); killed++; } catch (Throwable ignored) {}
+                if (ppid == myPid) continue;   // 正常子进程，服务 onDestroy 已处理
+            }
+            r.close();
+            if (killed > 0) logLine(ctx, "[quit] 清理残留子进程 " + killed + " 个");
+        } catch (Throwable t) {
+            logLine(ctx, "[quit] 清孤儿失败: " + t);
+        }
+    }
+
+    /** 用户是否点过「彻底退出」（点过就不许自愈再把服务拉起来） */
+    public static boolean userStopped(Context ctx) {
+        return flag(ctx, "user_stopped");
+    }
+
+    /** 用户回到 App 并明确要启动时清掉该标记 */
+    public static void clearUserStopped(Context ctx) {
+        try { new java.io.File(ctx.getFilesDir(), "user_stopped").delete(); } catch (Throwable ignored) {}
     }
 
     // ---------- 手机适配补丁开关 ----------
@@ -1074,34 +1425,25 @@ public final class KeepAlive {
 
     /* ===== 更新清单下载（原 PanelPatch 里的网络工具，补丁注入删掉后挪到这里） ===== */
 
-    /** APK 更新清单/资源的 GitHub 加速镜像（与 release tag patch 同一目录） */
-    static final String MIRROR_URL = "https://ghfast.top/https://github.com/dassein-afk/10router-mobile/releases/download/latest/";
+    /**
+     * 更新清单的 GitHub 加速镜像。
+     * ❗必须用精确版本号，不能用 `latest`：ghfast 不解析 releases/download/latest/ 这种标签，
+     * 恒返回 404（实测多次、跨数小时一致）。而 `latest` 恰好是"永远不会变"的写法，
+     * 所以这个 404 在用户侧表现为"更新按钮永远检查失败"。
+     * 发新版时这里要跟着改 tag —— build-android.sh 会断言它与 versionName 一致。
+     */
+    static final String MIRROR_URL = "https://ghfast.top/https://github.com/dassein-afk/10router-mobile/releases/download/v0.0.9/";
 
     /** 版本清单镜像地址 */
     static final String MIRROR_MANIFEST = MIRROR_URL + "version.json";
 
-    /** 版本清单专用：origin→mirror 各试两次（不同资源不粘 preferredBase） */
-    static String fetchPair(String originUrl, String mirrorUrl, int limit) throws Exception {
-        Exception last = null;
-        String[] urls = {originUrl, mirrorUrl};
-        for (String u : urls) {
-            for (int attempt = 1; attempt <= 2; attempt++) {
-                try { return fetch(u, limit); }
-                catch (Exception e) {
-                    last = e;
-                    if (attempt < 2) { try { Thread.sleep(500); } catch (InterruptedException ie) { attempt = 2; } }
-                }
-            }
-        }
-        throw new Exception((last != null && last.getMessage() != null ? last.getMessage() : "网络失败")
-                + "（清单主站与镜像都不通）");
-    }
-
     /** 抓取文本，超过 limit 字节即失败（防被错误页/大文件撑爆内存） */
     static String fetch(String url, int limit) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-        c.setConnectTimeout(8000);
-        c.setReadTimeout(15000);
+        // 更新检查是"按钮点下去要立刻有反应"的场景：清单只有 200 字节，8s/10s 足够。
+        // 原来 8s/15s 乘上"三级来源 × 每次可能重试"会让用户盯着"正在检查"一分多钟。
+        c.setConnectTimeout(6000);
+        c.setReadTimeout(10000);
         c.setInstanceFollowRedirects(true);
         try {
             int rc = c.getResponseCode();

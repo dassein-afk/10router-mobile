@@ -83,8 +83,7 @@
     vpn:          { t: '切换守候…',       ms: 4000 },
     anchor_auto:  { t: '切换中…',       ms: 4000 },
     anchor_vpn:   { t: '挂锚中…',     ms: 8000 },
-    anchor_audio: { t: '挂音频锚…',       ms: 4000 },
-    anchor_off:   { t: '解除守候…',       ms: 4000 },
+        anchor_off:   { t: '解除守候…',       ms: 4000 },
     vpnSettings:  { t: '打开 VPN 设置…',  ms: 3000 },
     log:          { t: '读取中…',         ms: 3000 },
     cdlog:        { t: '读取中…',         ms: 3000 },
@@ -93,7 +92,6 @@
     tunnelLog:    { t: '读取中…',         ms: 3000 },
     claim:        { t: '正在领取…',       ms: 30000, rel: 'claim' },
     screenOn:     { t: '切换常亮…',     ms: 3000, rel: 'screenOn' },
-    bgact:        { t: '打开授权页…',   ms: 3000 }
   };
   var busyRel = {};   // rel -> [解锁函数]：结果回执按 kind 批量解锁
   var copyFlash = { t: 0, a: '' };   // 复制按钮的“✓ 已复制”瞬时态（活在数据里，不怕 2.5s 刷新重建）
@@ -173,24 +171,42 @@
 
   function guardRows(s, full) {
     return [
+      // ❗已授权时也要给按钮：原来 action=null 会让按钮整个消失，只剩一个绿色标签，
+      //   用户面前没有任何可点的东西，"关不掉"的感觉就是这么来的。
+      //   这四项都是**系统权限**，Android 不允许 App 自己撤销（只有在系统设置里关）。
+      //   所以已授权时按钮写"系统设置"，点进去由用户在系统里关，而不是假装我们能关。
       checkRow('🔔', '通知权限', '用于常驻通知，避免被系统回收',
-        chip(s.notif, '已允许', '未允许'), s.notif ? null : 'notify'),
+        chip(s.notif, '已允许', '未允许'), 'notify', s.notif ? '系统设置' : '去开启'),
       checkRow('🔋', '电池优化豁免', '避免息屏后被系统冻结',
-        chip(s.battery, '已豁免', '未豁免'), s.battery ? null : 'battery'),
+        chip(s.battery, '已豁免', '未豁免'), 'battery', s.battery ? '系统设置' : '去开启'),
       checkRow('🔗', '系统加固', '进程被结束后自动重连',
-        chip(s.anchor, '已开启', '未开启'), s.anchor ? null : 'anchor'),
+        chip(s.anchor, '已开启', '未开启'), 'anchor', s.anchor ? '系统设置' : '去开启'),
+      // 自启动是"不占 VPN 通道"的保活里最关键的一环：厂商白名单默认全关，
+      // 而且没有任何系统 API 能查状态，所以它永远是动作按钮，不是可自动判定的开关。
+      checkRow('🚀', '自启动授权', '厂商的后台白名单，默认是关的；关着就会被清',
+        '<span class="chip">需手动</span>', 'autostart', '去设置'),
+      // 无障碍锚点：可选第四档。和 VPN 锚同级（都是系统级绑定），但不占 VPN 通道。
+      // 必须把授权的真实含义写在副标题里——系统的授权弹窗会写"读取屏幕"，
+      // 如果界面上不主动说明，用户看到系统文案会觉得我们在骗他授权。
+      checkRow('♿', '无障碍锚点（可选·四档）',
+        '系统级绑定，不占 VPN 通道；授权时系统会提示「读取屏幕」，本服务已关闭全部读取能力',
+        s.a11y ? '<span class="chip ok">已开启</span>'
+               : '<span class="chip">可选</span>',
+        'a11y', s.a11y ? '系统设置' : '去开启'),
       anchorRow(s, full)
     ];
   }
 
-  /** 守候锚点：VPN 锚 ⇄ 音频锚互切（用户痛点：VPN 通道要留给梯子/Tailscale/wg，
-   *  强守候不能抢槽）。状态 chip 在右（与其他体检行一致），模式按钮在文字下方。
+  /** 守候锚点：只在 VPN 通道空闲时挂一条零路由隧道（不代理任何流量）。
+   *  用户的梯子/Tailscale/WG 一占用，就自动让位，不会两条 VPN 互相顶。
+   *  状态 chip 在右（与其他体检行一致），模式按钮在文字下方。
    *  边界说明：锚点只防"内存回收杀"，防不了激进 ROM 的"息屏冻结"；
    *  冻结→授权页按钮，无线电省电→已内置高性能锁（状态可见），绝对在线→服务器常亮。 */
   function anchorRow(s, full) {
-    var cur = s.vpnAnchor ? '<span class="chip ok">VPN锚·占通道</span>'
-            : s.audioAnchor ? '<span class="chip ok">音频锚·不占</span>'
-            : '<span class="chip bad">无锚</span>';
+    var cur = s.vpnAnchor ? '<span class="chip ok">VPN锚·通道空闲时</span>'
+            : (s.anchorMode === 'auto' ? '<span class="chip ok">已让位·不与梯子抢</span>'
+            : s.anchorMode === 'off' ? '<span class="chip bad">已关</span>'
+            : '<span class="chip bad">未挂锚</span>');
     var why = (s.anchorWhy || '').split('|')[1] || '';
     var now = (why || '未挂锚（选「自动」即挂）') + ' · 无线电' + (s.radioFull ? '全速锁' : '省电');
 
@@ -201,7 +217,7 @@
     if (!full) {
       return '<div class="chk"><div class="ic">🛡</div>' +
         '<div class="tx"><b>守候锚点</b><span>' + now + '</span></div>' + cur +
-        ((s.vpnAnchor || s.audioAnchor) ? ''
+        (s.vpnAnchor ? ''
           : '<button class="btn sm ghost" onclick="act(\'anchor_auto\',this)">挂锚</button>') +
         '</div>';
     }
@@ -222,19 +238,24 @@
        不需要的人不被 160 字挡住视线 —— 但一句结论留在明面上，不做"藏起来骗人"。 */
     return '<div class="chk chk2"><div class="ic">🛡</div>' +
       '<div class="tx"><b>守候锚点</b><span>现状：' + now + '</span></div>' + cur +
-      '<div class="ops-group"><span class="gl">模式</span><div class="seg">' +
-        seg('auto', '自动') + seg('vpn', 'VPN') + seg('audio', '音频') + seg('off', '关') +
+      '<div class="ops-group"><span class="gl">锚点模式</span><div class="seg">' +
+        seg('auto', '自动') + seg('vpn', 'VPN') + seg('off', '关') +
       '</div></div>' +
-      '<div class="ops-group"><span class="gl">服务器模式</span>' +
+      /* 「服务器模式」原来是个凭空的分类名，实际上它只包含两件具体的事：
+         屏幕不熄 + 禁止触摸。名字不对会让用户以为这里有一整套"服务器设置"，
+         而点开只有两个开关。改成直说它是什么。
+         另外删掉了「授权后台活动」和「防误触设置」两个按钮：
+           · 授权后台活动 —— 与页面顶部「电池优化豁免」是同一个系统设置，重复入口；
+           · 防误触设置 —— 跳的是系统显示/锁屏设置**首页**，那页上不一定有这一项，
+             用户点进去只会一脸茫然（原话："我不知道要设置什么"）。而且它防的是
+             "手机放口袋里误碰"，这件事下面的「禁触摸」开关已经完整覆盖。 */
+      '<div class="ops-group"><span class="gl">插电当服务器时</span>' +
         '<div class="sw-row">' +
           sw(s.keepScreenOn, 'screenOn', (s.keepScreenMode === 2 ? '亮度0' : '常亮')) +
           sw(s.touchBlock, 'touchBlock', '禁触摸') +
         '</div>' +
         '<p class="opnote">常亮只在 App 前台且插电时生效，锁屏即失效。想让屏幕黑着又不会误碰，两个一起开。</p>' +
       '</div>' +
-      '<div class="ops-group"><span class="gl">系统操作</span>' +
-        '<button class="btn sm ghost" onclick="act(\'bgact\',this)">授权后台活动</button>' +
-        '<button class="btn sm ghost" onclick="act(\'mistouch\',this)">防误触设置</button></div>' +
       '</div>';
   }
 
@@ -276,45 +297,34 @@
     setHTML($('remote2'), full);
   }
 
-  /* 设置页「网页版」入口。三条铁律（都是真机指认出来的，别再退回去）：
-     ① **本机地址就是 127.0.0.1**。这是手机本地跑的本地服务，在手机上打开就是本机。
-        不许拿 lan 的第一个 IP 去拼入口 —— 那可能是 WireGuard/其它网卡的地址，用户会看到
-        一个"这是哪儿的 IP"的东西，而且它还会被拿去当主入口。
-     ② **本机免密钥、局域网要密钥**（1.11.21 定稿）。
-        1.11.18/19 一刀切"都要密钥"：本机白添一步，且密钥每次重绑都换，复制出去的链接当场
-        失效，页面只会回一句"需要密钥"—— 那句提示本身是死循环（让用户去 App 看密钥，
-        而用户正是从 App 复制来的）。1.11.20 又矫枉过正全免密钥，局域网里谁都能改守护。
-        现在由 ShellWeb 按**请求来源地址**判定：loopback 放行，其它来源必须 ?k= 或 Cookie。
-     ③ 布局必须**竖排**：这一块原来是两个面板地址并排（flex 行、各占一半），
-        换成一整条 URL 后，半宽会把地址折三四行、按钮也被挤窄。 */
+  /* 设置页「面板地址」：网关/额度各自一个独立端口，本机地址 + 局域网地址两条。
+     不给壳的浏览器版（20130 已删）：它与 App 重复，还要额外维护一套密钥和鉴权，
+     而用户真正常用的是「在平板上开面板」这一件事。 */
   function renderWebEntry(s) {
     var box = $('webEntry');
     if (!box) return;
-    if (!s.webOn) { box.innerHTML = '<div class="note" style="margin:0">网页服务未启动</div>'; return; }
-    var port = s.webPort || 20130;
-    var localUrl = 'http://127.0.0.1:' + port + '/';
-    window.__webUrl = localUrl;
-    var h = '<div class="wp"><b>手机本机</b><code>' + localUrl + '</code>' +
-      '<div class="wpops"><button class="btn sm ghost" onclick="openUrl(window.__webUrl)">打开</button>' +
-      '<button class="btn sm ghost" onclick="copyAddr(window.__webUrl)">复制</button></div></div>';
-    // 两个面板端口（用户 2026-10-22 决定：不反代，直接给端口 + 打开/复制）
     var gwPort = s.gwPort || 20128, cdPort = s.cdPort || 47860;
-    var gwUrl = 'http://127.0.0.1:' + gwPort + '/dashboard';
-    var cdUrl = 'http://127.0.0.1:' + cdPort + '/';
-    h += '<div class="wp"><b>网关面板</b><code>' + gwUrl + '</code>' +
-      '<div class="wpops"><button class="btn sm ghost" onclick="openUrl(\'' + gwUrl + '\')">打开</button>' +
-      '<button class="btn sm ghost" onclick="copyAddr(\'' + gwUrl + '\')">复制</button></div></div>';
-    h += '<div class="wp"><b>额度面板</b><code>' + cdUrl + '</code>' +
-      '<div class="wpops"><button class="btn sm ghost" onclick="openUrl(\'' + cdUrl + '\')">打开</button>' +
-      '<button class="btn sm ghost" onclick="copyAddr(\'' + cdUrl + '\')">复制</button></div></div>';
     var ip = (s.lan || '').split(',')[0];
-    if (s.bindAll && ip) {
-      var lanUrl = 'http://' + ip + ':' + port + '/?k=' + (s.webToken || '');
-      h += '<div class="wp"><b>同 Wi-Fi 的其它设备</b><code>' + lanUrl + '</code>' +
-        '<div class="wpops"><button class="btn sm ghost" onclick="copyAddr(\'' + lanUrl + '\')">复制地址</button>' +
-        '<button class="btn sm ghost" onclick="act(\'webReset\',this)">重新生成密钥</button></div></div>';
+    var lanOn = !!s.bindAll && !!ip;
+
+    /* 一块面板 = 两条地址。本机地址在手机上就能开；开了局域网访问后，
+       下面再浮出一条局域网地址，给同一 Wi-Fi 的电脑/平板用（两个都保留）。 */
+    function block(name, path, port) {
+      var local = 'http://127.0.0.1:' + port + path;
+      var h = '<div class="wp"><b>' + name + '</b><code>' + local + '</code>' +
+        '<div class="wpops">' +
+        '<button class="btn sm ghost" onclick="openUrl(\'' + local + '\')">打开</button>' +
+        '<button class="btn sm ghost" onclick="copyAddr(\'' + local + '\')">复制</button>' +
+        '</div>';
+      if (lanOn) {
+        var lan = 'http://' + ip + ':' + port + path;
+        h += '<div class="wplan"><span class="lb">同 Wi-Fi</span><code>' + lan + '</code>' +
+          '<button class="btn sm ghost" onclick="copyAddr(\'' + lan + '\')">复制</button></div>';
+      }
+      return h + '</div>';
     }
-    box.innerHTML = h;
+
+    box.innerHTML = block('网关面板', '/dashboard', gwPort) + block('额度面板', '/', cdPort);
   }
 
   function renderPorts(s) {
@@ -366,15 +376,22 @@
       ? ((s.cdAccounts ? s.cdAccounts + ' 个账号' : '还没有账号，去面板添加') + today)
       : '点「面板」看日志与原因';
 
-    var okCount = (s.notif ? 1 : 0) + (s.battery ? 1 : 0) + (s.anchor ? 1 : 0) + ((s.vpnAnchor || s.audioAnchor) ? 1 : 0);
-    $('hdot').className = 'dot ' + (okCount >= 3 ? 'ok' : (okCount >= 2 ? 'warn' : 'bad'));
+    // 计数只算「必需项」：无障碍锚点是可选项，它没开不算"还缺"，
+    // 否则首页会永远挂着一条红色缺失提示，用户会以为坏了。
+    var okCount = (s.notif ? 1 : 0) + (s.battery ? 1 : 0) + (s.anchor ? 1 : 0) + ((s.vpnAnchor || s.anchorMode === 'auto') ? 1 : 0);
+    $('hdot').className = 'dot ' + (okCount >= 4 ? 'ok' : (okCount >= 3 ? 'warn' : 'bad'));
 
-    // 首页只显示"缺什么"，不重复整张清单（完整清单与全部控件在设置页）
-    var missing = guardRows(s, false).filter(function (r) { return r.indexOf('chip ok') < 0; });
+    // 首页只报"缺什么"，不重复整张清单；也不放按钮（跳系统页的入口只在设置页）
+    var REQUIRED = 5;   // 通知 / 电池 / 系统加固 / 自启动 / 守候锚点
+    var missing = guardRows(s, false).filter(function (r) { return r.indexOf('chip ok') < 0; })
+      .filter(function (r) { return r.indexOf('无障碍锚点') < 0; })
+      // 剥掉整行里的按钮：首页只留文字摘要
+      .map(function (r) { return r.replace(/<button[\s\S]*?<\/button>/g, ''); });
     setHTML($('guardSummary'), missing.length
-      ? '<div style="font-size:13.5px;color:var(--warn);margin-bottom:2px">' + (4 - missing.length)
-        + '/4 项已开，还缺 ' + missing.length + ' 项</div>' + missing.join('')
-      : '<div style="font-size:13.5px;color:var(--ok)">4/4 项全部已开</div>');
+      ? '<div style="font-size:13.5px;color:var(--warn);margin-bottom:2px">' + (REQUIRED - missing.length)
+        + '/' + REQUIRED + ' 项已开，还缺 ' + missing.length + ' 项 · 在「设置」里逐项开启</div>' + missing.join('')
+      : '<div style="font-size:13.5px;color:var(--ok)">' + REQUIRED + '/' + REQUIRED
+        + ' 项必需项已开' + (s.a11y ? '，另开了无障碍锚点' : '') + '</div>');
 
     setHTML($('checks'), guardRows(s, true).join(''));
     $('st-hb').textContent = fmtAge(s.hbAge);
@@ -389,8 +406,8 @@
 
   /* 浏览器实测用的演示数据（无 Native 时走这里） */
   var MOCK = { ver: '1.11.10', gw: true, booting: false, hbAge: 4, boots: 1, freezeCount: 0,
-             notif: true, battery: true, anchor: true, vpnAnchor: false, audioAnchor: true,
-             anchorMode: 'auto', anchorWhy: 'audio|外部 VPN 占通道，自动让位', extVpn: true,
+             notif: true, battery: true, anchor: true, vpnAnchor: false, anchorMode: 'auto', a11y: false,
+             anchorWhy: 'none|Chrome 正占用 VPN 通道，已让位', extVpn: true,
              keepScreenOn: false, keepScreenMode: 0, touchBlock: false, radioFull: true,
              cd: true, cdAccounts: 2, cdToday: false,
              gwPort: 20128, cdPort: 47860, bindAll: true, lan: '192.168.1.23', vpn: '100.64.7.9',

@@ -96,6 +96,8 @@ public class GatewayService extends Service {
             logLine("[shell] 无线电锁失败: " + e);
         }
         registerScreenForensics();
+        // 服务起来了就把守卫进程也叫醒：此后两个进程互为存活证据。
+        GuardLink.ensureGuard(this);
     }
 
     /** 息屏/亮屏取证：日志时间线能直接回答"到底是哪一层在锁屏后死了"——
@@ -128,6 +130,12 @@ public class GatewayService extends Service {
 
     @Override
     public int onStartCommand(Intent i, int flags, int startId) {
+        // 用户点过「彻底退出」→ START_STICKY 重建也不许复活
+        if (KeepAlive.userStopped(this)) {
+            logLine("[shell] 用户已要求停止 → 服务拒绝启动");
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         wantRun = true;
         if (i != null && ACTION_TUNNEL.equals(i.getAction())) {
             logLine("[tunnel] 收到隧道开关变更 → 停止当前隧道，按新状态重来");
@@ -260,16 +268,26 @@ public class GatewayService extends Service {
                 }
                 continue;
             }
+            // ⚠️ 这里曾经有个「连续 3 次无响应 → destroy node」的判据。但本循环每 30 秒才转一圈，
+            //    3 次 = 90 秒；而 node 正常退出后 cd/gw runner 自己会在 1~2 秒内重启它，
+            //    于是这 90 秒里有两次探测注定打在冷启窗口上 → 第三次判死 → 又把刚起来的 healthy node 杀掉。
+            //    它和守卫进程的拉起也互相踩：守卫刚拉起来，这里又 destroy。日志里 startId 每次 +20
+            //    （60/80/100）就是这个回环的脚印。
+            //    现在改成「只记录、不主动杀」：进程不存在才重启，进程在但 HTTP 不通交给 node 自己
+            //    和守卫进程处理——杀一个正在冷启的 node 永远不会让它更快好起来。
             healthy = false;
             healthFails++;
-            logLine("[shell] health fail " + healthFails + "/3");
+            logLine("[shell] health fail " + healthFails + "/3（不主动杀 node，等它自己起来）");
             if (healthFails >= 3) {
-                Process p = proc;
                 healthFails = 0;
+                Process p = proc;
+                boolean procDead = true;
                 if (p != null) {
-                    logLine("[shell] 连续无响应，重启 node");
+                    try { p.exitValue(); } catch (IllegalThreadStateException stillRunning) { procDead = false; }
+                }
+                if (procDead) {
+                    logLine("[shell] node 进程确实不在了 → 重启");
                     startNotif("网关无响应，正在重启…");
-                    try { p.destroy(); } catch (Exception ignored) {}
                 }
             }
         }
@@ -398,11 +416,45 @@ public class GatewayService extends Service {
         int backoff = 2;
         while (wantRun) {
             long startedAt = System.currentTimeMillis();
-            boolean alive = launchCd();
+            // ❗launchCd() 返回「spawn 成功」，不等于「进程健康」：node 可能因为
+            //   数据目录被别的实例锁住而在 1 秒内退出。这两种情况必须区别对待。
+            boolean spawned = launchCd();
             if (!wantRun) break;
-            if (alive && System.currentTimeMillis() - startedAt > 60_000) backoff = 2;
-            try { Thread.sleep(backoff * 1000L); } catch (InterruptedException e) { break; }
-            backoff = Math.min(backoff * 2, 60);
+            if (!spawned) {
+                try { Thread.sleep(backoff * 1000L); } catch (InterruptedException e) { break; }
+                backoff = Math.min(backoff * 2, 60);
+                continue;
+            }
+            // 等它自然退出；活着就每 500ms 确认一次
+            long aliveSince = System.currentTimeMillis();
+            while (wantRun) {
+                Process p = cdProc;
+                if (p == null) break;
+                try {
+                    p.exitValue();
+                    break;                        // 退出了
+                } catch (IllegalThreadStateException stillRunning) {
+                    // 仍在跑：跨过 60 秒就算稳定，退避归零，然后继续陪它
+                    if (System.currentTimeMillis() - aliveSince > 60_000L) backoff = 2;
+                    try { Thread.sleep(500L); } catch (InterruptedException e) { return; }
+                }
+            }
+            long lived = System.currentTimeMillis() - startedAt;
+            // ❗这里是 v0.0.7 的回归点：原来只要 spawn 成功就把 backoff 归零，
+            //   于是一个「1 秒就死」的进程会被立刻重拉，形成 1 秒一轮的死循环，
+            //   并把 cd.log 刷爆（实测每秒 2 行）。秒退必须退避，且要告诉用户为什么。
+            boolean stable = lived > 60_000L;
+            if (stable) {
+                backoff = 2;
+                logLine("[cd] 额度管家进程退出（运行 " + (lived / 1000) + "s）→ 重启");
+            } else {
+                boolean portBusy = KeepAlive.portInUse(CD_PORT);
+                logLine("[cd] 额度管家启动后 " + (lived / 1000) + "s 就退出"
+                        + (portBusy ? "（" + CD_PORT + " 端口已被占用，可能已有另一个实例在跑）" : "")
+                        + " → " + backoff + " 秒后重试");
+                try { Thread.sleep(backoff * 1000L); } catch (InterruptedException e) { break; }
+                backoff = Math.min(backoff * 2, 60);
+            }
         }
     }
 

@@ -34,6 +34,16 @@ public class VpnKeepAliveService extends VpnService {
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
             KeepAlive.logLine(this, "[vpn] 收到停止指令，关闭守候通道");
+            closeTun();
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+        // ❗意志优先：用户把锚点模式选成「关」之后，任何来源（START_STICKY 重建、
+        //   系统重启隧道、别的代码误调）都不许再把通道建起来。
+        //   没有这道闸，用户点了关、系统下一秒重建，界面又变回「占用中」。
+        if (!KeepAlive.anchorWanted(this)) {
+            KeepAlive.logLine(this, "[vpn] 锚点模式为关，拒绝建立守候通道");
+            closeTun();
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -103,19 +113,19 @@ public class VpnKeepAliveService extends VpnService {
         }
     }
 
-    /** 用户在系统里撤销/切换到别的 VPN：不翻用户的"守候意愿"（那是模式文件管的），
-     *  交回协调器立刻重排锚点：被别的 VPN 顶掉 → 马上退到音频锚；手动关掉 → 模式降到音频。 */
+    /**
+     * 用户在系统里撤销/切换到别的 VPN。
+     *
+     * ❗这里不能再"降到音频锚"：音频锚已删除。而且不能让协调器立刻重排 —— 撤销瞬间我们的
+     * Network 记录可能还没消失，`externalVpn()` 会误判"通道空闲"，转头又把隧道建回来，
+     * 和用户的梯子互相顶。正确做法是交给协调器，但先记一笔"刚被撤销"，让它走 90 秒冷静期。
+     */
     @Override
     public void onRevoke() {
         KeepAlive.logLine(this, "[vpn] 系统撤销了守候通道（可能被别的 VPN 顶掉）");
         closeTun();
-        try {
-            if (!KeepAlive.externalVpn(this) && KeepAlive.anchorMode(this).equals("auto")) {
-                // 没有别的 VPN 却断了 = 用户在系统里手动关的：别再抢 VPN 槽，改用不占通道的音频锚
-                KeepAlive.logLine(this, "[anchor] 检测到用户手动停用 VPN 锚 → 守候模式降为音频");
-                KeepAlive.setAnchorMode(this, "audio");
-            }
-        } catch (Throwable ignored) {}
+        boolean byOtherVpn = KeepAlive.externalVpn(this);
+        KeepAlive.noteVpnRevoked(this, byOtherVpn);
         KeepAlive.evaluateAnchor(this, true);
         super.onRevoke();
     }
@@ -125,8 +135,25 @@ public class VpnKeepAliveService extends VpnService {
         KeepAlive.logLine(this, "[vpn] onDestroy");
         closeTun();
         // 被系统停掉也别断供：交给闹钟/Job 再拉
+        current = null;
         KeepAlive.schedulePing(this);
         super.onDestroy();
+    }
+
+    /** 从任意外部位置立即释放隧道（用户点「关」/ 彻底退出时用，不等服务生命周期） */
+    public static void forceCloseTun() {
+        try {
+            VpnKeepAliveService inst = current;
+            if (inst != null) inst.closeTun();
+        } catch (Throwable ignored) {}
+        active = false;
+    }
+
+    private static volatile VpnKeepAliveService current;
+
+    @Override public void onCreate() {
+        super.onCreate();
+        current = this;
     }
 
     private void closeTun() {

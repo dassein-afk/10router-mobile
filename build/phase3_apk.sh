@@ -31,6 +31,10 @@ du -sh app pfx
 # ---- 2. bootstrap.zip (assets payload; reuse if already built) ----
 mkdir -p apk/assets
 if [ ! -s apk/assets/bootstrap.zip ]; then
+  # Tailwind v4 把全部样式放进 @layer，而 @layer 需要 Chromium>=99；
+  # 无 GMS 的华为/EMUI WebView 常停更在更早版本 → 整份样式被忽略（面板变白屏黑字）。
+  # 展开成普通规则（顺序不变，语义等价），老内核也能渲染。
+  python3 flatten_layers.py app/.next/static/css/*.css || exit 9
   zip -q -9 -r apk/assets/bootstrap.zip pfx app || exit 8
 fi
 ls -la apk/assets/bootstrap.zip
@@ -40,7 +44,7 @@ ls -la apk/assets/bootstrap.zip
 # CD 载荷由 KeepAlive.ensureCdPayload 从 assets/cd.zip 解出 cd/bin/creditdaddy.js。
 rm -rf apk/assets/ui && mkdir -p apk/assets/ui
 # 手机适配补丁 1.0.0 已改为源码级（打进上游源码），不再随包发 panel-fix.{css,js}
-for f in index.html app.js offline.html OPEN_SOURCE_NOTICES.txt web-shim.js; do
+for f in index.html app.js offline.html OPEN_SOURCE_NOTICES.txt; do
   [ -s "apk-src/ui/$f" ] || { echo "!! 缺 apk-src/ui/$f"; exit 11; }
   cp -f "apk-src/ui/$f" "apk/assets/ui/$f"
 done
@@ -85,7 +89,7 @@ $BT/apksigner verify --print-certs "$APK" | head -6
 
 # ---- 6. 出包自证：assets 一个都不能少（少了就别发） ----
 for e in assets/ui/index.html assets/ui/app.js assets/ui/offline.html \
-         assets/ui/OPEN_SOURCE_NOTICES.txt assets/ui/web-shim.js \
+         assets/ui/OPEN_SOURCE_NOTICES.txt \
          assets/bootstrap.zip assets/cd.zip; do
   unzip -l "$APK" | grep -qE "[[:space:]]$e\$" || { echo "!! APK 缺 $e —— 别再发这个包"; exit 13; }
 done

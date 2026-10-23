@@ -1,0 +1,57 @@
+--- a/cd/src/zcodeGateway.js
++++ b/cd/src/zcodeGateway.js
+@@ -42,6 +42,41 @@
+ import { logger, summarizeAttempts } from './logger.js';
+ import { t } from './i18n.js';
+ 
++/**
++ * 把 fetch 的异常翻译成「能拿去排障」的一句话。
++ *
++ * 背景：Node/undici 的 fetch 遇到底层网络错误时，顶层 `message` 恒为 `fetch failed`，
++ * 连接被重置、DNS 失败、TLS 证书过期、代理拒绝——四种完全不同的原因，用户看到的都是同一句
++ * 「网络错误×2」。手机端尤其要命：用户开了梯子（VPN 抢通道）、或者刚被系统冻结过一秒，
++ * 都可能表现成这一句，而修复方向完全不同。
++ *
++ * 所以这里沿 cause 链一路取 code / errno / syscall / hostname，拼成：
++ *   fetch failed · ECONNRESET @ zcode.z.ai:443
++ * 没有 cause 时退回原 message，绝不抛错（诊断函数本身不能成为新的故障点）。
++ */
++function describeFetchError(e) {
++  try {
++    const base = e && e.message ? String(e.message) : '网络错误';
++    const parts = [];
++    let cur = e;
++    for (let depth = 0; cur && depth < 4; depth++) {
++      const code = cur.code || cur.errno;
++      if (code && !parts.includes(String(code))) parts.push(String(code));
++      if (cur.syscall && !parts.includes(String(cur.syscall))) parts.push(String(cur.syscall));
++      if (cur.hostname && !parts.some((x) => x.includes(cur.hostname))) parts.push('@' + cur.hostname);
++      if (cur.port && !parts.some((x) => x.includes(':' + cur.port))) {
++        const hIdx = parts.findIndex((x) => x.startsWith('@'));
++        if (hIdx >= 0) parts[hIdx] = parts[hIdx] + ':' + cur.port;
++        else parts.push(':' + cur.port);
++      }
++      cur = cur.cause;
++    }
++    return parts.length ? `${base} · ${parts.join(' ')}` : base;
++  } catch {
++    return '网络错误';
++  }
++}
++
+ const PLAN_MESSAGES_URL = 'https://zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages';
+ const CAPTCHA_CACHE_TTL_MS = 30_000;
+ const ACCOUNT_COOLING_MS = 5 * 60_000;
+@@ -470,7 +505,11 @@
+       });
+     } catch (e) {
+       if (clientAbort.signal.aborted) return; // 客户端先断了
+-      attempted.push({ account: label, ok: false, error: e.message });
++      // ââ fetch å¤±è´¥å¿é¡»æ cause æ¿åºæ¥ ââ
++      // Node ç fetch éå°åºå±ç½ç»éè¯¯æ¶ï¼é¡¶å± message æ°¸è¿æ¯åºå®ç `fetch failed`ï¼
++      // çæ­£çåå ï¼ECONNRESET / ETIMEDOUT / ENOTFOUND / è¯ä¹¦è¿æ / ä»£çæç»ï¼å¨å¨ e.cause éã
++      // åªè®° `fetch failed` ç­äºæ²¡è®°ï¼ç¨æ·çä¸åºæ¯èªå·±çç½ç»è¿æ¯ä¸æ¸¸æ­»äºã
++      attempted.push({ account: label, ok: false, error: describeFetchError(e) });
+       continue;
+     }
+ 

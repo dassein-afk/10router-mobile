@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  无障碍锚点的能力声明。
+
+  ❗ 刻意不声明 android:canRetrieveWindowContent="true"：
+     一旦声明，系统才会真的把窗口内容交给服务；不声明就只是"被系统绑定"，拿不到屏幕上的字。
+  也刻意不声明 android:accessibilityFlags="flagRetrieveInteractiveWindows"。
+
+  packageNames 留空 = 不限定应用；但我们 eventTypes 在代码里设成 0、这里也不写
+  accessibilityEventTypes，所以任何事件都不会推过来。目的是"被绑定"，不是"监听"。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/a11y_desc"
+    android:summary="@string/a11y_summary"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:canRetrieveWindowContent="false"
+    android:notificationTimeout="0" />

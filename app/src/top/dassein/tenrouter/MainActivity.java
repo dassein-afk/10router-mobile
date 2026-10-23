@@ -85,7 +85,6 @@ public class MainActivity extends Activity {
     private volatile boolean panelOpen = false;
     private volatile boolean extracting = false;
     private int extractFails = 0;
-    private ShellWeb shellWeb;                   // 网页版 == APK：把壳原样搬到浏览器（:20130）
 
     @Override
     protected void onCreate(Bundle saved) {
@@ -147,12 +146,15 @@ public class MainActivity extends Activity {
         applyKeepScreenOn();
         // ⚠️ 触摸屏蔽**不自动恢复**：自动恢复会让用户在重启后被锁死，
         //    只能靠重启手机甚至安全模式脱困。改为「用户手动开启才生效」。
-        askNotificationPermission();
-        ensureBatteryExempt();
+        // ⛔ 绝不在启动时主动跳系统页。
+        //    这两个方法原来是「无条件、每次启动都调」—— 用户每开一次 App 就被弹到电池优化 /
+        //    通知设置，而他此刻只想用网关。已经拒绝过一次的东西，再弹一次也不会变成同意。
+        //    正确位置：首页「保活体检」里由用户点哪一项才跳哪一页（case "battery"/"notify"）。
+        //    唯一例外：系统在 Android 13+ 要求 POST_NOTIFICATIONS 必须由用户交互触发，
+        //    但那是 requestPermissions 而不是跳页，且只在用户第一次进设置页时发生 —— 见设置页。
+        // askNotificationPermission();
+        // ensureBatteryExempt();
         new Thread(this::prepare).start();
-        // 网页版：随「局域网访问」开关一起绑定 0.0.0.0/127.0.0.1（默认不开 LAN 时仅本机可访问）
-        shellWeb = new ShellWeb(this, GatewayService.PORT, GatewayService.CD_PORT);
-        shellWeb.start(KeepAlive.bindAll(this));
     }
 
     private void tune(WebView w) {
@@ -167,7 +169,9 @@ public class MainActivity extends Activity {
         // 等），在手机上直接溢出、一半在屏幕外。这两句让 meta 生效，布局视口=设备宽。
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(true);
-        w.setBackgroundColor(0xFF0A0A0A);
+        // 底色必须跟随主题：恒黑会让浅色主题下任何未被页面覆盖的区域（首帧、加载间隙、
+        // 透明底的面板）整片刷黑，深色字直接看不见。面板自己的主题由上游决定，这里只兜底色。
+        w.setBackgroundColor("dark".equals(systemScheme()) ? 0xFF0A0A0A : 0xFFFDFAF6);
     }
 
     /** 底部导航：原生绘制，常驻显示（含面板页），不再有"顶部凭空多出一条栏"。
@@ -539,6 +543,9 @@ public class MainActivity extends Activity {
                 extract();
                 marker.createNewFile();
             }
+            // ❗先清「彻底退出」标记，否则下面 startService 会被 onStartCommand 拒绝，
+            //   App 就永久失效了（用户唯一的恢复手段就是"重新打开 App"）。
+            KeepAlive.clearUserStopped(this);
             startService(new Intent(this, GatewayService.class));   // 同时会带起额度管家
             js("onBoot(100,'运行环境就绪')");
             js("refresh()");
@@ -640,9 +647,9 @@ public class MainActivity extends Activity {
             o.put("notif", KeepAlive.notifEnabled(this));
             o.put("battery", KeepAlive.isIgnoringBattery(this));
             o.put("anchor", KeepAlive.anchorEnabled(this));
+            o.put("a11y", KeepAlive.a11yEnabled(this));
             // 注意："vpn" 这个键留给 100.x 网段字符串（下面远程段），锚点状态用独立键，别再撞车
             o.put("vpnAnchor", VpnKeepAliveService.active);
-            o.put("audioAnchor", AudioAnchorService.active);
             o.put("anchorMode", KeepAlive.anchorMode(this));
             o.put("anchorWhy", KeepAlive.anchorState(this));
             o.put("extVpn", KeepAlive.externalVpn(this));
@@ -665,19 +672,8 @@ public class MainActivity extends Activity {
             JSONArray acc = readJsonArray(new File(cdHome(this), "accounts.json"));
             if (acc != null) {
                 o.put("cdAccounts", acc.length());
-                String today = new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date());
-                boolean done = false;
-                for (int i = 0; i < acc.length(); i++) {
-                    JSONObject a = acc.optJSONObject(i);
-                    String lc = a == null ? "" : a.optString("lastCheckin", "");
-                    if (lc.startsWith(today)) { done = true; break; }
-                }
-                o.put("cdToday", done);
+                o.put("cdToday", cdCheckedToday(acc));
             }
-            // 网页版 == APK：浏览器入口（:20130）。免密钥，本机浏览器直接点开即可。
-            o.put("webPort", ShellWeb.PORT);
-            o.put("webOn", shellWeb != null && shellWeb.isRunning());
-            o.put("webToken", withSecret && shellWeb != null ? shellWeb.getToken() : "");
         } catch (Exception ignored) {}
         return o.toString();
     }
@@ -690,6 +686,49 @@ public class MainActivity extends Activity {
 
     static File cdHome(Activity a) {
         return new File(a.getFilesDir(), CD_HOME);
+    }
+
+    /**
+     * 「今日已领」的判定。
+     *
+     * 踩过的坑：原来拿 accounts.json 里 lastCheckin 的前 10 位去比**本机本地日期**。
+     * 这有两个错：
+     *   ① lastCheckin 是 CD 用 toISOString() 写的 **UTC** 时间；北京 00:00–07:59 期间
+     *      UTC 还是前一天 ⇒ 每晚有 8 小时必然判成"未领"，用户明明刚领完。
+     *   ② 更根本的：CD 判断"今天领没领"根本不看 lastCheckin，而是看
+     *      state.json 的 qoderDailyDone[id] === dayKey(provider)，而 dayKey 是按
+     *      **各服务商自己的刷新线**算的（qoder 是 UTC+8 早上 10 点，其余 0 点），
+     *      不是自然日。用自然日去比，跨刷新线时同样对不上。
+     *
+     * 所以正确做法是**复刻 CD 的判据本身**，不自己发明日期：
+     *   state.json.qoderDailyDone 里存在某个账号、且它的值 == 该账号当前 provider 的 dayKey，
+     *   就是"今天已领"。这样面板显示已领、外面显示已领，永远一致。
+     */
+    private boolean cdCheckedToday(JSONArray acc) {
+        try {
+            JSONObject st = new JSONObject(readText(new File(cdHome(this), "state.json")));
+            JSONObject done = st.optJSONObject("qoderDailyDone");
+            if (done == null) return false;
+            long now = System.currentTimeMillis();
+            for (int i = 0; i < acc.length(); i++) {
+                JSONObject a = acc.optJSONObject(i);
+                if (a == null) continue;
+                String id = a.optString("id", "");
+                String provider = a.optString("provider", "");
+                if (id.isEmpty()) continue;
+                String marked = done.optString(id, "");
+                // h = 该服务商的刷新小时（UTC+8）；CD 的 dayKey 是
+                //   new Date(now + (8-h)h).toISOString().slice(0,10)
+                // toISOString() 永远输出 UTC ⇒ 这里格式化必须显式用 UTC 时区，
+                // 否则 SimpleDateFormat 会按本机时区（+8）多减 8 小时，结果又对不上。
+                int h = ("qoder".equals(provider) || "qoder-cn".equals(provider)) ? 10 : 0;
+                SimpleDateFormat f = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+                f.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+                String dayKey = f.format(new Date(now + (8 - h) * 3600_000L));
+                if (dayKey.equals(marked)) return true;
+            }
+        } catch (Exception ignored) {}
+        return false;
     }
 
     /** 额度管家是否在线：读它自己写的 daemon.json 里的 pid，比调接口轻且不需要密钥 */
@@ -726,16 +765,26 @@ public class MainActivity extends Activity {
             case "notify":    askNotificationPermission(); break;
             case "battery":   ensureBatteryExempt(); break;
             case "anchor":    KeepAlive.openAnchorSettings(this); break;
-            case "autostart": KeepAlive.openAutostartSettings(this); break;
+            case "autostart": {
+                // 跳转可能失败（机型 Activity 名改了），把手动路径告诉用户，别点了没反应
+                String mp = KeepAlive.openAutostartSettings(this);
+                js("onNativeResult('autostart','已打开自启动设置。若没跳转成功，手动走： " + esc(mp) + "')");
+                break;
+            }
+            case "a11y": {
+                // ❗无障碍无法用代码开启，只能跳系统设置让用户自己点。而且这个页面
+                // 不能直达某一项，必须在提示里写清"找哪个名字"，否则用户在长列表里找不到。
+                KeepAlive.openA11ySettings(this);
+                js("onNativeResult('a11y','在列表里找到「10Router 网关锚点」并打开。" +
+                   "系统提示可能写着「读取屏幕」，本服务已关闭全部读取能力（不读窗口、不订阅事件）。')");
+                break;
+            }
             case "vpn":         cycleAnchor(); break;
             case "anchor_auto":  setAnchor("auto"); break;
             case "anchor_vpn":   setAnchor("vpn"); break;
-            case "anchor_audio": setAnchor("audio"); break;
             case "anchor_off":   setAnchor("off"); break;
             case "vpnSettings": openVpnSettings(); break;
             case "screenOn":  toggleScreenOn(); break;
-            case "bgact":     bgActivitySettings(); break;
-            case "mistouch":  openMistouchSettings(); break;
             case "touchBlock": toggleTouchBlock(); break;
             case "panelBlank": panelBlankToOffline(); break;
             case "restart":   restartGateway(); break;
@@ -746,9 +795,9 @@ public class MainActivity extends Activity {
             case "tunnelToggle": toggleTunnel(); break;
             case "tunnelLog":  showLog("tunnel.log", "隧道日志（尾部）"); break;
             case "diag":      KeepAlive.shareReport(this); break;
+            case "quit":      confirmQuit(); break;
             case "update":    openUpdate(); break;
             case "updateSw":  openUpdate(); break;
-            case "webReset":  if (shellWeb != null) shellWeb.rotateToken(); break;   // 局域网旧地址失效
             default: break;
         }
     }
@@ -786,28 +835,8 @@ public class MainActivity extends Activity {
      *  真相：亮度0 只关背光，触控层照样工作（StackOverflow 权威确认）；真正防误触只有两条路——
      *  ① 屏幕真正关闭（手动锁屏，触控由锁屏界面接管/禁用）② 系统级防误触保护（距离传感器检测遮挡）。
      *  各厂商路径不同，逐个试；都打不开就提示用户手动找。 */
-    private void openMistouchSettings() {
-        String[] acts = {
-            "android.settings.DISPLAY_SETTINGS",           // 三星：显示 → 防误触保护
-            "com.android.settings.Settings$LockScreenSettingsActivity",  // 小米：锁屏 → 口袋模式
-            "com.oneplus.settings.SettingsActivity",        // 一加：便捷工具 → 口袋模式
-            "android.settings.SETTINGS"
-        };
-        for (String a : acts) {
-            try { startActivity(new Intent(a)); js("toast('找「防误触保护 / 口袋模式 / 防误触」并开启（靠距离传感器检测口袋）')"); return; }
-            catch (Exception ignored) {}
-        }
-        js("toast('请手动到 设置→显示 里找「防误触保护 / 口袋模式」开启','bad')");
-    }
 
     /** 直达「后台活动/省电」授权页（与冻结通知同一链路，保证入口一致） */
-    private void bgActivitySettings() {
-        try {
-            startActivity(KeepAlive.backgroundRunIntent(this));
-        } catch (Exception e) {
-            js("toast('打不开授权页：请手动到 设置→应用→10Router→电池 里放行','bad')");
-        }
-    }
 
     /** 允许局域网/虚拟网访问：切换网关监听地址（需要重启网关生效） */
     /** 面板进程在、网页也"加载完"了，但 15 秒后页面仍无内容（上游白屏/崩溃）：
@@ -832,7 +861,6 @@ public class MainActivity extends Activity {
     private void toggleLan() {
         boolean on = KeepAlive.bindAll(this);
         KeepAlive.setBindAll(this, !on);
-        if (shellWeb != null) shellWeb.start(!on);   // 网页版跟着 LAN 开关一起重绑
         try {
             Intent i = new Intent(this, GatewayService.class);
             i.setAction(GatewayService.ACTION_RESTART);
@@ -892,6 +920,35 @@ public class MainActivity extends Activity {
 
     /** 补丁热更新：只拉 ~20KB 的补丁文件，不需要重装 App（闸 5） */
     /** 一键回滚到随包内置补丁（闸 6 的回退通道） */
+    /**
+     * 彻底退出：二次确认后把一切停掉。
+     *
+     * 为什么必须二次确认：这个动作会停掉网关，正在别处用它的对话会立刻断；
+     * 而且撤销了所有自动重启，不会自己恢复。误触一次代价很大。
+     */
+    private void confirmQuit() {
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("彻底退出？")
+                .setMessage("会停掉：网关（其他 App 里的对话会断）、额度管家、后台守卫、VPN 守候隧道。\n\n"
+                        + "同时撤销所有自动重启：心跳闹钟、看门狗、开机自启、守卫互拉。\n\n"
+                        + "退出后本 App 不会自己再启动。要恢复，重新打开本 App 即可。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("彻底退出", (d, w) -> doQuit())
+                .show();
+    }
+
+    private void doQuit() {
+        try {
+            KeepAlive.shutdownAll(this);
+        } catch (Throwable t) {
+            js("toast('退出时出错：" + esc(String.valueOf(t)) + "')");
+        }
+        // 把界面也收掉，否则用户以为还有东西在跑
+        try { finishAndRemoveTask(); } catch (Throwable ignored) {
+            try { finish(); } catch (Throwable ignored2) {}
+        }
+    }
+
     private void restartGateway() {
         try {
             Intent i = new Intent(this, GatewayService.class);
@@ -948,28 +1005,48 @@ public class MainActivity extends Activity {
     private void openUpdate() {
         js("toast('正在检查版本…')");
         new Thread(() -> {
-            String msg; String url = null;
             int mine = 0; String myName = "?";
             try {
                 android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
                 mine = pi.versionCode; myName = pi.versionName;
             } catch (Exception ignored) {}
-            try {
-                org.json.JSONObject o = new org.json.JSONObject(
-                        KeepAlive.fetchPair(GatewayService.UPDATE_MANIFEST, KeepAlive.MIRROR_MANIFEST, 64 * 1024));
-                int rv = o.optInt("versionCode", 0);
-                String rn = o.optString("versionName", "?");
-                if (rv <= 0) throw new Exception("清单缺版本号");
-                if (rv > mine) {
-                    msg = "有新版本 " + rn + "（本机 " + myName + "）";
-                    url = GatewayService.APK_URL + "?vc=" + mine;
-                } else if (rv == mine) {
-                    msg = "已是最新（" + myName + "）";
-                } else {
-                    msg = "线上 " + rn + " 比本机 " + myName + " 低 —— 不给降级";
+
+            // 三级来源，逐级降级；全失败时把每一级的原因都带出来。
+            // 之前只说"网络或清单不可用"，等于把三种完全不同的故障说成一句没有信息量的话。
+            java.util.List<String> why = new java.util.ArrayList<>();
+            int rv = 0; String rn = "?"; String apkUrl = null;
+            boolean resolved = false;
+            org.json.JSONObject o = null;
+            for (int src = 0; src < 3 && !resolved; src++) {
+                try {
+                    if (src == 0) {
+                        o = new org.json.JSONObject(KeepAlive.fetch(GatewayService.UPDATE_MANIFEST, 64 * 1024));
+                    } else if (src == 1) {
+                        o = new org.json.JSONObject(KeepAlive.fetch(KeepAlive.MIRROR_MANIFEST, 64 * 1024));
+                    } else {
+                        o = fromGithubApi();
+                    }
+                    int v = o.optInt("versionCode", 0);
+                    if (v <= 0) throw new Exception("清单缺 versionCode");
+                    rv = v; rn = o.optString("versionName", "?");
+                    apkUrl = o.optString("url", null); resolved = true;
+                } catch (Exception e) {
+                    String msg = e.getMessage();
+                    why.add(new String[]{"官网", "镜像", "GitHub API"}[src] + ": "
+                            + (msg == null ? e.getClass().getSimpleName() : msg));
                 }
-            } catch (Exception e) {
-                msg = "检查失败（网络或清单不可用）";
+            }
+
+            String msg; String url = null;
+            if (!resolved) {
+                msg = "检查失败 · " + android.text.TextUtils.join("；", why);
+            } else if (rv > mine) {
+                msg = "有新版本 " + rn + "（本机 " + myName + "）";
+                url = (apkUrl != null && !apkUrl.isEmpty()) ? apkUrl : GatewayService.APK_URL + "?vc=" + mine;
+            } else if (rv == mine) {
+                msg = "已是最新（" + myName + "）";
+            } else {
+                msg = "线上 " + rn + " 比本机 " + myName + " 低 —— 不给降级";
             }
             final String m = msg, u = url;
             runOnUiThread(() -> {
@@ -981,6 +1058,52 @@ public class MainActivity extends Activity {
                 }
             });
         }).start();
+    }
+
+    /**
+     * 兜底来源：GitHub Releases API。
+     * 镜像清单 404 的根因是 ghfast 不认 releases/download/latest/ 这种标签；
+     * 而 API 不依赖标签名。这里拿到 release 后，直接取其 version.json 资产（仍是同一份带
+     * versionCode 的清单）与 .apk 资产的 browser_download_url（走 GitHub 自己的 CDN，
+     * 不经过 ghfast），作为下载直链。GitHub API 强制要求 User-Agent。
+     */
+    private static org.json.JSONObject fromGithubApi() throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(
+                "https://api.github.com/repos/dassein-afk/10router-mobile/releases/latest").openConnection();
+        c.setConnectTimeout(8000); c.setReadTimeout(12000);
+        c.setRequestProperty("Accept", "application/vnd.github+json");
+        c.setRequestProperty("User-Agent", "10Router-Android");
+        try {
+            int rc = c.getResponseCode();
+            if (rc != 200) throw new Exception("GitHub API HTTP " + rc);
+            org.json.JSONObject rel = new org.json.JSONObject(readAllText(c.getInputStream(), 64 * 1024));
+            org.json.JSONArray assets = rel.optJSONArray("assets");
+            if (assets == null) throw new Exception("release 无 assets");
+            String vurl = null, apk = null;
+            for (int i = 0; i < assets.length(); i++) {
+                org.json.JSONObject a = assets.getJSONObject(i);
+                String n = a.optString("name");
+                if ("version.json".equals(n)) vurl = a.optString("browser_download_url");
+                else if (n.endsWith(".apk")) apk = a.optString("browser_download_url");
+            }
+            if (vurl == null) throw new Exception("release 无 version.json 资产");
+            org.json.JSONObject v = new org.json.JSONObject(KeepAlive.fetch(vurl, 64 * 1024));
+            if (v.optInt("versionCode", 0) <= 0) throw new Exception("version.json 缺 versionCode");
+            if (apk != null) v.put("url", apk);
+            return v;
+        } finally { c.disconnect(); }
+    }
+
+    private static String readAllText(java.io.InputStream in, int limit) throws Exception {
+        try {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192]; int n;
+            while ((n = in.read(buf)) > 0) {
+                out.write(buf, 0, n);
+                if (out.size() > limit) throw new Exception("内容过大");
+            }
+            return out.toString("UTF-8");
+        } finally { try { in.close(); } catch (Exception ignored) {} }
     }
 
     /** 版本比较：1.2.3 > 1.2.2 返回 1，相等 0，小于 -1。 */
@@ -1111,14 +1234,14 @@ public class MainActivity extends Activity {
     }
 
 
-    /** 切换守候锚点模式：auto=VPN 优先、被占自动让位音频 | vpn=强制 VPN 锚 | audio=只用音频锚 | off=关。
+    /** 切换守候锚点模式：auto=通道空闲时挂 VPN 锚、被梯子占用时让位 | vpn=强制 VPN 锚 | off=关。
      *  互切本身由 KeepAlive.evaluateAnchor 裁决，这里只负责"存意愿 + 补授权 + 立刻重估"。 */
     private void setAnchor(String mode) {
         KeepAlive.setAnchorMode(this, mode);
         if (mode.equals("vpn") || mode.equals("auto")) {
             try {
                 if (!VpnKeepAliveService.active && VpnService.prepare(this) != null) {
-                    js("toast('用 VPN 锚需授权一次（只驻留、不接管流量）；拒绝也行，会自动改挂音频锚')");
+                    js("toast('用 VPN 锚需授权一次（只驻留、不接管流量）；拒绝也行，改靠系统绑定锚')");
                     startActivityForResult(VpnService.prepare(this), REQ_VPN);
                 }
             } catch (Exception e) {
@@ -1150,7 +1273,7 @@ public class MainActivity extends Activity {
         super.onActivityResult(req, res, data);
         if (req == REQ_VPN) {
             js(res == RESULT_OK ? "toast('已授权：切回 VPN 锚（第 4 档）')"
-                                : "toast('已取消 VPN 授权：继续用音频锚，不占你的 VPN 通道')");
+                                : "toast('已取消 VPN 授权：不抢你的 VPN 通道，改靠系统绑定锚')");
             KeepAlive.evaluateAnchor(this, true);
         } else if (req == REQ_OVERLAY) {
             // 用户从悬浮窗设置回来：再查一次，成了就自动开启屏蔽
@@ -1233,7 +1356,21 @@ public class MainActivity extends Activity {
     void ensureBatteryExempt() {
         try {
             PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-            if (pm == null || pm.isIgnoringBatteryOptimizations(getPackageName())) return;
+            boolean exempt = pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
+            if (exempt) {
+                // ❗已豁免时原来直接 return，用户点了毫无反应 —— 这就是"关不掉"的来源。
+                //   电池优化只有系统能改，所以把人送到系统页面，并说明在那里关。
+                try {
+                    startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+                    js("onNativeResult('battery','已打开系统的「电池优化」列表。要关掉豁免，在这个列表里找到 10Router，点它并选择「优化 / 不豁免」。')");
+                    return;
+                } catch (Exception e) {
+                    startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.parse("package:" + getPackageName())));
+                    js("onNativeResult('battery','已打开本应用详情页。电池相关选项在「电池」或「耗电管理」里。')");
+                    return;
+                }
+            }
             Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
                     Uri.parse("package:" + getPackageName()));
             startActivity(i);
@@ -1242,11 +1379,23 @@ public class MainActivity extends Activity {
 
     void askNotificationPermission() {
         try {
-            if (android.os.Build.VERSION.SDK_INT >= 33
-                    && checkSelfPermission("android.permission.POST_NOTIFICATIONS")
-                       != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            boolean granted = android.os.Build.VERSION.SDK_INT < 33
+                    || checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                       == android.content.pm.PackageManager.PERMISSION_GRANTED;
+            if (!granted) {
                 requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1001);
+                return;
             }
+            // 已允许时原来什么都不做（点了没反应）。通知权限只能由用户在系统里关，
+            // 所以直接送到本应用的通知设置页，那是唯一能关掉它的地方。
+            Intent i = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+            i.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+            try { startActivity(i); }
+            catch (Exception e) {
+                startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:" + getPackageName())));
+            }
+            js("onNativeResult('notify','已打开本应用的通知设置。要关掉常驻通知，在这里关闭「允许通知」。关掉后网关会更容易被系统回收。')");
         } catch (Exception e) {
             KeepAlive.logLine(this, "[shell] 请求通知权限失败: " + e);
         }

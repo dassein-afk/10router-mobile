@@ -102,7 +102,11 @@ assert_patches() {
   chk "面板内更新入口已删（补丁 1.0.0）" "! grep -rqs 'Download new APK' '$app/.next'"
   # 侧栏不透明：旧的半透明 rgba(38,38,38,.72) 必须从产物里消失
   chk "侧栏不透明（旧半透明值已消失）" "! grep -rqE 'rgba\([[:space:]]*38[[:space:]]*,[[:space:]]*38[[:space:]]*,[[:space:]]*38[[:space:]]*,[[:space:]]*0?\.72[[:space:]]*\)' '$app/.next/static'"
-  chk "node 父进程守卫 (custom-server.js)" "grep -qs 'ANDROID_PARENT_PID' '$app/custom-server.js'"
+  # 父进程孤儿处理：必须"继续运行"而不是"自杀"。旧版是 ppid 一变就 process.exit(0)，
+  # 那让 node 在 App 被回收时主动下线，正是「退出 App 后 Agent 无响应」的元凶。
+  # 正反两条都要断言：新语义在，旧自杀逻辑不在。
+  chk "node 孤儿继续运行 (custom-server.js)" "grep -qs '继续运行以服务本机 Agent' '$app/custom-server.js'"
+  chk "node 孤儿不再自杀 (custom-server.js)" "! grep -qs '父进程已退出（ppid=' '$app/custom-server.js'"
   # v1.11.16：窄屏 CSS 兜底与 DEFAULT_LOCALE=zh-CN 两个补丁已按用户要求撤掉，
   # 不再作为断言项（留着会让每次构建都必然 MISS 并拒绝发版）。
   echo "产物校验：缺失 $bad 项"

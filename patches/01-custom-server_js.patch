@@ -1,23 +1,33 @@
 --- a/custom-server.js
 +++ b/custom-server.js
-@@ -6,6 +6,26 @@
+@@ -6,6 +6,36 @@
  
  const origCreate = http.createServer.bind(http);
  
-+// 安卓壳（10Router Android APK）专用：父进程（App）死了就自杀。
-+// 否则 App 被系统杀死后 node 可能残留成孤儿，占着 20128 端口：新实例绑定失败、
-+// 旧孤儿又不再应答 → 用户看到"网关进程在、API 不通"。设了 ANDROID_PARENT_PID 才生效。
++// 安卓壳（10Router Android APK）专用：父进程孤儿处理。
++//
++// ❗这段曾经写成"父进程一变就自杀"，那是错的，也是「退出 App 后 Agent 没反应」的元凶：
++//   App 进程被 ROM 回收/冻结时，node 的 ppid 会变成 1（被 init 收养）。按旧逻辑 node 5 秒内
++//   自杀，于是**唯一还在服务的东西主动下线了**。而用户此时正拿着 Agent 在等回复。
++//   等用户切回 App，GatewayService 被拉起、node 重新 spawn，"回去就好了"——症状完全吻合。
++//
++// 现在的语义反过来：
++//   父进程消失 → **继续活着**（继续服务本机 Agent），只在日志里记一笔；
++//   由 Java 侧（GuardService / 看门狗）负责在 App 回来时接管，而不是杀掉重开。
++//   真正要防的"孤儿占端口"由 bind 失败重试解决，不靠自杀。
 +if (process.env.ANDROID_PARENT_PID) {
 +  const parent = Number(process.env.ANDROID_PARENT_PID);
 +  if (Number.isFinite(parent) && parent > 0) {
++    let orphanLogged = false;
 +    const timer = setInterval(() => {
-+      try {
-+        if (process.ppid !== parent) {
-+          console.log("[android] 父进程已退出（ppid=" + process.ppid + "），node 自杀释放端口");
-+          process.exit(0);
-+        }
-+      } catch {
-+        process.exit(0);
++      const ppid = process.ppid;
++      // 被 init（或别的进程）收养 = 原来的 App 进程没了。此时**继续服务**。
++      if (ppid !== parent && !orphanLogged) {
++        orphanLogged = true;
++        console.log(
++          "[android] 原宿主进程已退出（ppid=" + ppid + "，原 " + parent +
++          "）→ 继续运行以服务本机 Agent；App 回来后接管"
++        );
 +      }
 +    }, 5000);
 +    timer.unref();

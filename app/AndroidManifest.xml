@@ -1,8 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+<!--
+  ⚠️⚠️ 这个文件不参与打包！⚠️⚠️
+  真正被 aapt2 link 使用的是 ../apk-src/AndroidManifest.xml（build/phase3_apk.sh 的 --manifest）。
+  这份副本只作阅读参考，两边内容并不一致（apk-src 多出 ACCESS_WIFI_STATE / SYSTEM_ALERT_WINDOW /
+  TouchBlockService 等）。改这里等于没改——踩过一次：新增 <service> 只改了这份，
+  构建全绿、包也签好，装到手机上服务根本不存在。
+  tools/build-android.sh 末尾的组件断言会拦住这种错。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
     package="top.dassein.tenrouter"
-    android:versionCode="236"
-    android:versionName="0.0.1">
+    android:versionCode="240"
+    android:versionName="0.0.5">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="28"/>
 
@@ -49,6 +57,28 @@
             android:name=".WatchdogJob"
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE"/>
+
+        <!-- 进程互拉：守卫进程跑在独立进程（同 uid），主进程被清它能几秒内拉回。
+             用 bindService 拉起（GuardLink），不是常驻空进程。 -->
+        <service
+            android:name=".GuardService"
+            android:exported="false"
+            android:process=":guard"/>
+
+        <!-- 无障碍锚点（可选第四档）：与 VPN 锚同级但不占 VPN 通道。
+             默认关闭，必须用户在系统无障碍设置里手动打开。 -->
+        <service
+            android:name=".A11yAnchorService"
+            android:exported="true"
+            android:label="10Router 网关锚点"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/a11y_anchor"/>
+        </service>
 
         <!-- 系统绑定锚点：把进程维持在"系统持有 binder 连接"的高优先级，而不是可随意回收的后台进程。
              不需要任何厂商白名单；由用户一次性授予"通知使用权"。

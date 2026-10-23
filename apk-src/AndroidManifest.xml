@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="top.dassein.tenrouter"
-    android:versionCode="236"
-    android:versionName="0.0.1">
+    android:versionCode="244"
+    android:versionName="0.0.9">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="28"/>
 
@@ -54,11 +54,31 @@
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE"/>
 
-        <!-- 音频守候锚（第 3.5 档）：19.5kHz/-62dBFS 听不见的播放流换取"音频应用"存活待遇，
-             不占 VPN 通道；与 VpnKeepAliveService 由 KeepAlive.evaluateAnchor() 互切 -->
+        <!-- 进程互拉：守卫进程跑在独立进程（同 uid），主进程被清它能几秒内拉回。
+             用 bindService 拉起（GuardLink），不是常驻空进程。
+             为什么必须有这条：闹钟只能把进程从"死"里救回，且是分钟级；国产 ROM 真正让网关
+             不可用的是冻结（进程还在、线程全停）。同 uid 的兄弟进程重启一个被判死的 Service
+             是毫秒级，这是唯一能"几秒内自愈"的手段，且不需要任何额外权限。 -->
         <service
-            android:name=".AudioAnchorService"
-            android:exported="false"/>
+            android:name=".GuardService"
+            android:exported="false"
+            android:process=":guard"/>
+
+        <!-- 无障碍锚点（可选第四档）：与 VPN 锚同级的系统绑定组件，但不占 VPN 通道。
+             这是唯一"开梯子的人也能拿到系统级存活待遇"的路子。
+             默认关闭，必须用户在系统无障碍设置里手动打开；本服务不读窗口内容、不订阅事件。 -->
+        <service
+            android:name=".A11yAnchorService"
+            android:exported="true"
+            android:label="10Router 网关锚点"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/a11y_anchor"/>
+        </service>
 
         <!-- 系统绑定锚点：把进程维持在"系统持有 binder 连接"的高优先级，而不是可随意回收的后台进程。
              不需要任何厂商白名单；由用户一次性授予"通知使用权"。

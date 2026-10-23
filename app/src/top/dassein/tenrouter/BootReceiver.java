@@ -24,7 +24,7 @@ public class BootReceiver extends BroadcastReceiver {
         KeepAlive.schedulePing(ctx);
         KeepAlive.watchNetwork(ctx);
         // 开机后按"守候模式"裁决该挂哪档锚：VPN 通道空闲挂 VPN 锚，被梯子/Tailscale 占了
-        // 就挂音频锚——绝不无脑拉 VPN，免得开机第一件事是抢掉用户的梯子。
+        // 绝不无脑拉 VPN，免得开机第一件事是抢掉用户的梯子；交给协调器判断通道是否空闲。
         if (!KeepAlive.anchorMode(ctx).equals("off")) {
             try {
                 KeepAlive.evaluateAnchor(ctx, true);
