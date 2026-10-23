@@ -5,7 +5,7 @@ import android.os.Build;
 import android.service.notification.NotificationListenerService;
 
 /**
- * 系统绑定锚点（"系统加固"开关）。
+ * 系统绑定锚点（通知使用权开关 = NotificationListenerService）。
  *
  * 为什么需要它：普通前台服务在国产 ROM 里只能拿"普通进程"待遇，息屏一段时间就被冻结/清掉。
  * 系统只对**系统绑定的组件**给高优先级待遇，而普通 App 无需任何厂商合作就能拿到的这类组件只有三种：

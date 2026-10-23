@@ -631,7 +631,7 @@ public final class KeepAlive {
         }
     }
 
-    // ---------- 系统绑定锚点（"系统加固"） ----------
+    // ---------- 系统绑定锚点（通知使用权 = NotificationListenerService） ----------
 
     /**
      * 用户是否已授予"通知使用权"（= 系统会绑着我们的 GatewayAnchorService）。
@@ -741,7 +741,7 @@ public final class KeepAlive {
         long age = heartbeatAgeSec(ctx);
         sb.append("上次心跳: ").append(age < 0 ? "无记录" : (age + " 秒前")).append('\n');
         sb.append("电池优化豁免: ").append(isIgnoringBattery(ctx) ? "已豁免" : "未豁免 ← 头号被杀原因").append('\n');
-        sb.append("系统绑定锚点: ").append(anchorEnabled(ctx) ? "已开启（系统持有连接）" : "未开启 ← 息屏后被清的主因").append('\n');
+        sb.append("网关保活(通知使用权): ").append(anchorEnabled(ctx) ? "已开启（系统持有连接）" : "未开启 ← 息屏后被清的主因").append('\n');
         sb.append("无障碍锚点: ").append(a11yEnabled(ctx)
                 ? "已开启（系统级绑定，不占 VPN 通道，不读屏幕）"
                 : "未开启（可选第四档；开了能和 VPN 锚拿同等待遇）").append('\n');
@@ -877,19 +877,26 @@ public final class KeepAlive {
                 return manualPath();
             } catch (Exception ignored) { /* 这家没这个 Activity，试下一个 */ }
         }
-        // 兜底 1：部分 ROM 只把入口挂在「电池」页下（华为的设置→电池→启动管理就是这种）
-        try {
-            android.content.Intent i = new android.content.Intent(
-                    android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
-            i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
-            if (ctx.getPackageManager().resolveActivity(i, 0) != null) {
-                ctx.startActivity(i);
-                logLine(ctx, "[anchor] 没有自启动直链，已打开电池优化列表；手动路径: " + manualPath());
-                return manualPath();
-            }
-        } catch (Exception ignored) {}
-        // 兜底 2：应用详情页。虽然要多点两下，但它在**所有** ROM 上都存在、且一定和本应用相关，
-        // 比"跳到某个不相干的系统页"强得多——用户至少知道自己站在哪、该找什么。
+        // 兜底 1（关键修正）：直接拉起厂商「手机管家 / 安全中心」App 主页。
+        // 这是 getActivity/XXPermissions（千万级权限框架）在华为/小米/OPPO/vivo 上验证过的做法：
+        // 这些厂商的后台/自启动页没有稳定公开的组件名，新系统版本甚至会拦截第三方直接拉起
+        // systemmanager 组件（SecurityException，见 golyakoff/ago-root#1893 真机复盘）。
+        // 所以宁可打开管家主页让用户自己点进去，也**绝不**退化到「电池优化」页——
+        // 那跟自启动是两回事，退化过去就是用户看到的「点自启动却进了电池优化界面」。
+        String[] managers = vendorManagers(mf);
+        for (String pkg : managers) {
+            try {
+                android.content.Intent li = ctx.getPackageManager().getLaunchIntentForPackage(pkg);
+                if (li != null) {
+                    li.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                    ctx.startActivity(li);
+                    logLine(ctx, "[anchor] 自启动无直链，已打开厂商管家主页(" + pkg + ")；手动路径: " + manualPath());
+                    return manualPath();
+                }
+            } catch (Exception ignored) {}
+        }
+        // 兜底 2：应用详情页。在**所有** ROM 上都存在、且一定和本应用相关，
+        // 比"跳到某个不相干的系统页"强——用户至少知道自己站在哪、该找什么。
         try {
             android.content.Intent i = new android.content.Intent(
                     android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -899,6 +906,29 @@ public final class KeepAlive {
             logLine(ctx, "[anchor] 没有可用的自启动直链，已打开本应用详情页；手动路径: " + manualPath());
         } catch (Exception ignored) {}
         return manualPath();
+    }
+
+    /**
+     * 各厂商「手机管家 / 安全中心」包名（与自启动/后台管理页同 App），用于兜底拉起主页。
+     * 来源交叉确认：getActivity/XXPermissions PermissionSettingPage 的
+     * HUA_WEI_MOBILE_MANAGER / XIAO_MI_MOBILE_MANAGER / OPPO_SAFE_CENTER /
+     * VIVO_MOBILE_MANAGER 常量，加 OPPO 开放平台与 iQOO/vivo 实测包名。
+     */
+    private static String[] vendorManagers(String mf) {
+        if (mf.contains("huawei") || mf.contains("honor") || mf.contains("harmony"))
+            return new String[]{"com.huawei.systemmanager","com.hihonor.systemmanager","com.honor.systemmanager"};
+        if (mf.contains("xiaomi") || mf.contains("redmi") || mf.contains("poco"))
+            return new String[]{"com.miui.securitycenter"};
+        if (mf.contains("oppo") || mf.contains("realme") || mf.contains("oneplus"))
+            return new String[]{"com.coloros.safecenter","com.oplus.safecenter","com.color.safecenter","com.oppo.safe"};
+        if (mf.contains("vivo") || mf.contains("iqoo"))
+            return new String[]{"com.iqoo.secure","com.vivo.permissionmanager","com.bairenkeji.icaller"};
+        if (mf.contains("samsung"))
+            return new String[]{"com.samsung.android.lool","com.samsung.android.sm"};
+        if (mf.contains("meizu"))
+            return new String[]{"com.meizu.safe"};
+        // 未知厂商：把常见管家都试一遍，谁装了拉谁。
+        return new String[]{"com.huawei.systemmanager","com.miui.securitycenter","com.coloros.safecenter","com.iqoo.secure","com.samsung.android.lool"};
     }
 
     /** 按本机厂商给出自启动的手动操作路径（跳转失败时这是唯一出路）。 */
@@ -1432,7 +1462,7 @@ public final class KeepAlive {
      * 所以这个 404 在用户侧表现为"更新按钮永远检查失败"。
      * 发新版时这里要跟着改 tag —— build-android.sh 会断言它与 versionName 一致。
      */
-    static final String MIRROR_URL = "https://ghfast.top/https://github.com/dassein-afk/10router-mobile/releases/download/v0.0.9/";
+    static final String MIRROR_URL = "https://ghfast.top/https://github.com/dassein-afk/10router-mobile/releases/download/v0.0.10/";
 
     /** 版本清单镜像地址 */
     static final String MIRROR_MANIFEST = MIRROR_URL + "version.json";

@@ -86,7 +86,7 @@
         <service
             android:name=".GatewayAnchorService"
             android:exported="true"
-            android:label="10Router 系统加固"
+            android:label="10Router 网关保活"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService"/>

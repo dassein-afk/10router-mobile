@@ -210,4 +210,21 @@ grep -qs '设置 → 电池 → 启动管理' "$ROOT/app/src/top/dassein/tenrout
 grep -qs 'isGatewayProbablyRunning' "$ROOT/app/src/top/dassein/tenrouter/GuardLink.java" \
   || { echo "  ❌ 守卫盲投 startForegroundService —— 会反复打断正在启动的 node"; exit 21; }
 echo "  ✅ 启动不骚扰 / 华为走启动管理 / 守卫先判状态再拉"
+# ④ 防回归（用户实测抓出来的两个错）：
+#    (a) 自启动兜底绝不能退化到「电池优化」页 —— 那样用户点"自启动"却进了电池优化界面；
+#        正确兜底是拉起厂商「手机管家/安全中心」主页（XXPermissions 验证过的做法）。
+if sed -n '/public static String openAutostartSettings/,/^    }/p' \
+     "$ROOT/app/src/top/dassein/tenrouter/KeepAlive.java" \
+  | grep -qs 'ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS'; then
+  echo "  ❌ 自启动兜底退化到了「电池优化」页 —— 用户会看到点自启动却进电池优化"; exit 22
+fi
+grep -qs 'getLaunchIntentForPackage' "$ROOT/app/src/top/dassein/tenrouter/KeepAlive.java" \
+  || { echo "  ❌ 自启动兜底缺少厂商管家主页拉起（vendorManagers）"; exit 22; }
+#    (b) 用户可见标签「系统加固」必须换成系统真实名称「通知使用权 / 网关保活」，
+#        否则用户点"系统加固"会跳到通知使用权页，看起来就是跳错了。
+if grep -qs '系统加固' "$ROOT/app/ui/app.js" "$ROOT/app/ui/index.html" \
+                        "$ROOT/app/AndroidManifest.xml" "$ROOT/apk-src/AndroidManifest.xml"; then
+  echo "  ❌ 仍残留用户可见的「系统加固」标签（应改为真实的「通知使用权 / 网关保活」）"; exit 22
+fi
+echo "  ✅ 自启动兜底走厂商管家 · 标签与系统页一致"
 echo "===== 完成（新包还没投放；要发布再走上传 + 飞书那一步）"

@@ -179,7 +179,7 @@
         chip(s.notif, '已允许', '未允许'), 'notify', s.notif ? '系统设置' : '去开启'),
       checkRow('🔋', '电池优化豁免', '避免息屏后被系统冻结',
         chip(s.battery, '已豁免', '未豁免'), 'battery', s.battery ? '系统设置' : '去开启'),
-      checkRow('🔗', '系统加固', '进程被结束后自动重连',
+      checkRow('🔗', '通知使用权', '授予后系统常驻绑定网关，进程被杀自动重连',
         chip(s.anchor, '已开启', '未开启'), 'anchor', s.anchor ? '系统设置' : '去开启'),
       // 自启动是"不占 VPN 通道"的保活里最关键的一环：厂商白名单默认全关，
       // 而且没有任何系统 API 能查状态，所以它永远是动作按钮，不是可自动判定的开关。
@@ -382,7 +382,7 @@
     $('hdot').className = 'dot ' + (okCount >= 4 ? 'ok' : (okCount >= 3 ? 'warn' : 'bad'));
 
     // 首页只报"缺什么"，不重复整张清单；也不放按钮（跳系统页的入口只在设置页）
-    var REQUIRED = 5;   // 通知 / 电池 / 系统加固 / 自启动 / 守候锚点
+    var REQUIRED = 5;   // 通知 / 电池 / 通知使用权 / 自启动 / 守候锚点
     var missing = guardRows(s, false).filter(function (r) { return r.indexOf('chip ok') < 0; })
       .filter(function (r) { return r.indexOf('无障碍锚点') < 0; })
       // 剥掉整行里的按钮：首页只留文字摘要
