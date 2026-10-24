@@ -405,9 +405,9 @@
 
 
   /* 浏览器实测用的演示数据（无 Native 时走这里） */
-  var MOCK = { ver: '1.11.10', gw: true, booting: false, hbAge: 4, boots: 1, freezeCount: 0,
+  var MOCK = { ver: '0.0.10', gw: true, booting: false, hbAge: 4, boots: 1, freezeCount: 0,
              notif: true, battery: true, anchor: true, vpnAnchor: false, anchorMode: 'auto', a11y: false,
-             anchorWhy: 'none|Chrome 正占用 VPN 通道，已让位', extVpn: true,
+             anchorWhy: 'none|已让位·不与梯子抢', extVpn: true,
              keepScreenOn: false, keepScreenMode: 0, touchBlock: false, radioFull: true,
              cd: true, cdAccounts: 2, cdToday: false,
              gwPort: 20128, cdPort: 47860, bindAll: true, lan: '192.168.1.23', vpn: '100.64.7.9',
