@@ -125,7 +125,7 @@ esac
 echo "  ✅ 镜像标签与版本号一致"
 
 # 打出来的包里必须真有本次要新增的组件。
-# 踩过的坑：我改了 app/AndroidManifest.xml 的 <service>，但打包用的是 apk-src/AndroidManifest.xml，
+# 踩过的坑：改了 app/AndroidManifest.xml 的 <service>，但打包用的是 apk-src/AndroidManifest.xml，
 # 构建一路绿灯、包也签了，装到手机上那两个服务根本不存在——"构建成功"不等于"改的东西进去了"。
 for SVC in GuardService A11yAnchorService; do
   if Q=$( "${SSH[@]}" "\$HOME/10droid/android-sdk/build-tools/34.0.0/aapt2 dump xmltree --file AndroidManifest.xml '$APK'" ) \
@@ -200,10 +200,14 @@ fi
 grep -qs 'askNotificationPermission();' "$ROOT/app/src/top/dassein/tenrouter/MainActivity.java" \
   || { echo "  ❌ 反断言前提不成立：askNotificationPermission 调用点全没了，设置页按钮会失效"; exit 19; }
 # ② 华为自启动必须在「启动管理」，不能在「应用管理」里找（用户实测那里压根没有这一项）
-sed -n '/public static String openAutostartSettings/,/^    }/p' \
-     "$ROOT/app/src/top/dassein/tenrouter/KeepAlive.java" | head -12 \
-  | grep -qs 'StartupNormalAppListActivity' \
-  || { echo "  ❌ 自启动候选第一位不是「启动管理」—— 华为会跳进没有自启动项的应用管理页"; exit 20; }
+#    ❗先整体取函数体进变量再判断：`sed | head | grep` 在 `set -o pipefail` 下会因 head
+#      提前关管道给 sed 发 SIGPIPE(exit 141)，整条管道被判非零 → 假失败（实测偶发，非回归）。
+AS_BLOCK=$(sed -n '/public static String openAutostartSettings/,/^    }/p' \
+   "$ROOT/app/src/top/dassein/tenrouter/KeepAlive.java" | head -30 || true)
+case "$AS_BLOCK" in
+  *StartupNormalAppListActivity*) : ;;
+  *) echo "  ❌ 自启动候选第一位不是「启动管理」—— 华为会跳进没有自启动项的应用管理页"; exit 20 ;;
+esac
 grep -qs '设置 → 电池 → 启动管理' "$ROOT/app/src/top/dassein/tenrouter/KeepAlive.java" \
   || { echo "  ❌ 华为的手动路径没写「设置 → 电池 → 启动管理」"; exit 20; }
 # ③ 守卫拉起网关前必须判状态（startForegroundService 对已存在的服务 = 再投一次 onStartCommand）

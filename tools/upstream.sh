@@ -107,7 +107,7 @@ assert_patches() {
   # 正反两条都要断言：新语义在，旧自杀逻辑不在。
   chk "node 孤儿继续运行 (custom-server.js)" "grep -qs '继续运行以服务本机 Agent' '$app/custom-server.js'"
   chk "node 孤儿不再自杀 (custom-server.js)" "! grep -qs '父进程已退出（ppid=' '$app/custom-server.js'"
-  # v1.11.16：窄屏 CSS 兜底与 DEFAULT_LOCALE=zh-CN 两个补丁已按用户要求撤掉，
+  # v1.11.16：窄屏 CSS 兜底与 DEFAULT_LOCALE=zh-CN 两个补丁已撤掉，
   # 不再作为断言项（留着会让每次构建都必然 MISS 并拒绝发版）。
   echo "产物校验：缺失 $bad 项"
   [ "$bad" -eq 0 ] || { echo "❌ 构建产物缺补丁 —— 这份包别发。"; exit 1; }
