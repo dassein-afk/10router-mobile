@@ -9,16 +9,18 @@
 
 - **网关** — 本地运行的 AI 路由网关，统一管理多个模型供应商，为客户端提供 OpenAI 兼容接口
 - **额度管家** — 多账号额度管理与每日签到，额度自动同步给网关
-- **网页版** — 在电脑或平板的浏览器里管理网关和额度
+- **网页版** — 在 App 内点「允许局域网访问」后，同一网络里的电脑/平板浏览器也能打开网关与额度面板
 - **后台守护** — 开机自启、进程监督、锁屏保活
 
 ## 安装
 
-1. 从 [Releases](../../releases) 下载最新 `10router-*.apk`
+1. 从 [Releases](../../releases) 或[产品页](https://das-sein.top/10router/)下载最新 APK
 2. 允许安装未知来源应用（自签名包，系统会提示"仍要安装"）
 3. 打开 App，等待首次初始化完成（约 1–2 分钟）
 4. 在网关面板设置访问密码
 5. 客户端 API Base 填 `http://127.0.0.1:20128/v1`
+
+> **从 v0.0.10 升级**：先卸载旧版再安装（覆盖安装会因签名不同失败；卸载会清空 App 内已存配置）。全新安装无需。
 
 **要求**：arm64 设备，Android 7.0 及以上。数据保存在应用私有目录，卸载后自动清除。
 
@@ -31,8 +33,8 @@
 apt install -y openjdk-17-jdk-headless binutils zip unzip python3-pil
 # Android SDK：build-tools;34.0.0 与 platforms;android-34
 
-# 构建（10Router 上游 tag + CreditDaddy 版本）
-tools/build-android.sh v1.6.0 1.6.0
+# 构建（10Router 上游 tag + CreditDaddy 版本；下面的组合与已发布 APK 内嵌版本一致）
+tools/build-android.sh v1.6.6 1.7.0
 ```
 
 脚本依次完成：重放上游补丁 → 重建 CreditDaddy 载荷 → Next 构建 → 组装 standalone →
@@ -59,13 +61,11 @@ app/                    APK 外壳（纯 Java，不依赖 Gradle）
     MainActivity.java       主界面与面板 WebView
     GatewayService.java     前台服务：启动并守护网关进程
     KeepAlive.java          保活策略、状态查询
-    ShellWeb.java           内置 HTTP 服务：网页版壳页面
   ui/                   壳页面（原生 HTML/CSS/JS，无框架）
   res/                  应用图标
 
 patches/                10Router 源码补丁
 cd-patches/             CreditDaddy 面板补丁
-backup/                 历史补丁备份（不参与构建）
 
 tools/
   build-android.sh        一键构建
